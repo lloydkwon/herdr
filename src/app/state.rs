@@ -1151,6 +1151,9 @@ pub(crate) enum DragTarget {
     AgentPanelScrollbar {
         grab_row_offset: u16,
     },
+    NotificationListScrollbar {
+        grab_row_offset: u16,
+    },
     PaneSplit {
         path: Vec<bool>,
         direction: Direction,
@@ -1284,6 +1287,18 @@ pub enum ToastKind {
     UpdateInstalled,
 }
 
+/// What a notification of this kind announces, in the words the toast uses.
+///
+/// Toasts, forwarded client notifications and the history list all name the same
+/// event, so they name it from here.
+pub fn toast_event_text(kind: ToastKind) -> &'static str {
+    match kind {
+        ToastKind::NeedsAttention => "needs attention",
+        ToastKind::Finished => "finished",
+        ToastKind::UpdateInstalled => "updated",
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToastTarget {
     pub workspace_id: String,
@@ -1320,6 +1335,47 @@ pub struct AgentNotificationDelivery {
     pub toast: Option<ToastNotification>,
     pub client_notification: Option<ToastNotification>,
     pub sound: Option<crate::sound::Sound>,
+}
+
+/// Where a recorded notification came from.
+///
+/// The two sources answer different questions — one is Herdr noticing a state
+/// change, the other is an agent speaking for itself — and the list colors them
+/// apart, so the distinction is kept rather than flattened into the title.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationSource {
+    AgentState(ToastKind),
+    Api,
+}
+
+/// One entry in the notification history.
+///
+/// `time_label` is formatted once, here, because the list is drawn per render ×
+/// per visible row × per attached client. Nothing on that path may reach for a
+/// clock or a formatter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationRecord {
+    pub seq: u64,
+    pub time_label: String,
+    pub source: NotificationSource,
+    /// None when nothing claimed the notification — an API call from outside any
+    /// pane. The list shows those as Herdr's own.
+    pub agent_label: Option<String>,
+    pub known_agent: Option<crate::detect::Agent>,
+    pub workspace_id: Option<String>,
+    pub pane_id: Option<PaneId>,
+    pub title: String,
+    pub context: String,
+}
+
+impl NotificationRecord {
+    /// The pane this entry points at, when it still has one to point at.
+    pub fn target(&self) -> Option<(&str, PaneId)> {
+        match (self.workspace_id.as_deref(), self.pane_id) {
+            (Some(workspace_id), Some(pane_id)) => Some((workspace_id, pane_id)),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1444,6 +1500,11 @@ pub struct AppState {
     pub config_diagnostic: Option<String>,
     pub toast: Option<ToastNotification>,
     pub pending_agent_notifications: std::collections::HashMap<PaneId, PendingAgentNotification>,
+    /// Notifications that already fired, newest first. A toast is gone as soon as
+    /// the next one lands; this is what is left of it.
+    pub notification_history: std::collections::VecDeque<NotificationRecord>,
+    pub notification_seq: u64,
+    pub notification_scroll: usize,
     pub copy_feedback: Option<CopyFeedback>,
     /// Last reported focus state for the outer terminal hosting herdr.
     /// None means unsupported or not yet reported, which preserves active-pane suppression.
@@ -1470,6 +1531,7 @@ pub struct AppState {
     pub agent_view_override: Option<crate::api::schema::AgentViewSetParams>,
     pub sidebar_agents: crate::config::AgentsSidebarConfig,
     pub sidebar_spaces: crate::config::SpacesSidebarConfig,
+    pub sidebar_notifications: crate::config::NotificationsSidebarConfig,
     pub next_agent_state_change_seq: u64,
     /// Capture mouse input for Herdr's own mouse UI. When false, Herdr only
     /// captures mouse while the focused pane app requests mouse reporting.
@@ -1745,6 +1807,72 @@ impl AppState {
         }
         ws.active_tab().map(|tab| tab.layout.focused()) == Some(pane_id)
     }
+
+    /// Records a notification that already fired.
+    ///
+    /// Called from the two places a notification is actually delivered, so the
+    /// history reflects what reached the user rather than what was considered.
+    pub fn record_notification(
+        &mut self,
+        source: NotificationSource,
+        agent_label: Option<String>,
+        known_agent: Option<crate::detect::Agent>,
+        workspace_id: Option<String>,
+        pane_id: Option<crate::layout::PaneId>,
+        title: String,
+        context: String,
+    ) {
+        // Recorded even when the section is hidden: turning it on should show
+        // what was missed, and the API serves the same list.
+        self.notification_seq = self.notification_seq.saturating_add(1);
+        self.notification_history.push_front(NotificationRecord {
+            seq: self.notification_seq,
+            time_label: notification_time_label(),
+            source,
+            agent_label,
+            known_agent,
+            workspace_id,
+            pane_id,
+            title,
+            context,
+        });
+        self.trim_notification_history();
+
+        // Someone scrolled back to read an old entry; a new arrival must not
+        // silently shift what they are looking at.
+        if self.notification_scroll > 0 {
+            self.notification_scroll = self
+                .notification_scroll
+                .saturating_add(1)
+                .min(self.notification_history.len().saturating_sub(1));
+        }
+    }
+
+    pub fn trim_notification_history(&mut self) {
+        let limit = self.sidebar_notifications.effective_limit();
+        while self.notification_history.len() > limit {
+            self.notification_history.pop_back();
+        }
+        self.notification_scroll = self
+            .notification_scroll
+            .min(self.notification_history.len().saturating_sub(1));
+    }
+
+    pub fn clear_notification_history(&mut self) {
+        self.notification_history.clear();
+        self.notification_scroll = 0;
+    }
+}
+
+/// Wall-clock stamp for one history entry, resolved at record time.
+///
+/// The list is drawn per render × per visible row × per attached client, so the
+/// clock is read here — once per notification — and never again.
+fn notification_time_label() -> String {
+    match crate::platform::local_datetime() {
+        Some(now) => format!("{:02}:{:02}", now.hour(), now.minute()),
+        None => "--:--".to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -1843,6 +1971,9 @@ impl AppState {
             config_diagnostic: None,
             toast: None,
             pending_agent_notifications: std::collections::HashMap::new(),
+            notification_history: std::collections::VecDeque::new(),
+            notification_seq: 0,
+            notification_scroll: 0,
             copy_feedback: None,
             outer_terminal_focus: None,
             prefix_code: KeyCode::Char('b'),
@@ -1866,6 +1997,7 @@ impl AppState {
             agent_view_override: None,
             sidebar_agents: crate::config::AgentsSidebarConfig::default(),
             sidebar_spaces: crate::config::SpacesSidebarConfig::default(),
+            sidebar_notifications: crate::config::NotificationsSidebarConfig::default(),
             next_agent_state_change_seq: 0,
             mouse_capture: true,
             copy_on_select: true,
@@ -2625,5 +2757,113 @@ mod tests {
                 "Collapse"
             ]
         );
+    }
+
+    fn record_test_notification(state: &mut AppState, title: &str) {
+        state.record_notification(
+            NotificationSource::AgentState(ToastKind::NeedsAttention),
+            Some("claude".into()),
+            None,
+            Some("w1".into()),
+            None,
+            title.into(),
+            String::new(),
+        );
+    }
+
+    #[test]
+    fn recorded_notifications_are_newest_first_and_numbered() {
+        let mut state = AppState::test_new();
+
+        record_test_notification(&mut state, "first");
+        record_test_notification(&mut state, "second");
+
+        let titles: Vec<&str> = state
+            .notification_history
+            .iter()
+            .map(|record| record.title.as_str())
+            .collect();
+        assert_eq!(titles, vec!["second", "first"]);
+        assert_eq!(state.notification_history[0].seq, 2);
+        assert_eq!(state.notification_history[1].seq, 1);
+    }
+
+    #[test]
+    fn history_drops_the_oldest_past_the_limit() {
+        let mut state = AppState::test_new();
+        state.sidebar_notifications.limit = 2;
+
+        for title in ["first", "second", "third"] {
+            record_test_notification(&mut state, title);
+        }
+
+        let titles: Vec<&str> = state
+            .notification_history
+            .iter()
+            .map(|record| record.title.as_str())
+            .collect();
+        assert_eq!(titles, vec!["third", "second"]);
+    }
+
+    // Reloading a smaller limit has to take effect now, not once enough new
+    // notifications arrive to push the old ones out.
+    #[test]
+    fn shrinking_the_limit_trims_immediately() {
+        let mut state = AppState::test_new();
+        for title in ["first", "second", "third"] {
+            record_test_notification(&mut state, title);
+        }
+
+        state.sidebar_notifications.limit = 1;
+        state.trim_notification_history();
+
+        assert_eq!(state.notification_history.len(), 1);
+        assert_eq!(state.notification_history[0].title, "third");
+    }
+
+    // Someone scrolled back to read an older entry; a new arrival must not
+    // shift the row out from under them.
+    #[test]
+    fn a_new_notification_keeps_a_scrolled_reader_in_place() {
+        let mut state = AppState::test_new();
+        record_test_notification(&mut state, "first");
+        record_test_notification(&mut state, "second");
+        state.notification_scroll = 1;
+
+        record_test_notification(&mut state, "third");
+
+        assert_eq!(state.notification_scroll, 2);
+        assert_eq!(state.notification_history[2].title, "first");
+    }
+
+    #[test]
+    fn history_is_still_recorded_while_the_section_is_hidden() {
+        let mut state = AppState::test_new();
+        state.sidebar_notifications.enabled = false;
+
+        record_test_notification(&mut state, "first");
+
+        assert_eq!(state.notification_history.len(), 1);
+    }
+
+    #[test]
+    fn clearing_history_resets_the_scroll() {
+        let mut state = AppState::test_new();
+        record_test_notification(&mut state, "first");
+        state.notification_scroll = 1;
+
+        state.clear_notification_history();
+
+        assert!(state.notification_history.is_empty());
+        assert_eq!(state.notification_scroll, 0);
+    }
+
+    // An entry only points somewhere when it has both halves of the address.
+    #[test]
+    fn a_record_without_a_pane_has_no_target() {
+        let mut state = AppState::test_new();
+        record_test_notification(&mut state, "first");
+
+        assert!(state.notification_history[0].target().is_none());
     }
 }

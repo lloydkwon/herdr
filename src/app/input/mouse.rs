@@ -632,6 +632,29 @@ impl AppState {
                         self.mode = Mode::Terminal;
                         return Some(MouseAction::FocusPane { ws_idx, pane_id });
                     }
+
+                    if let Some(target) =
+                        self.notification_scrollbar_target_at(mouse.column, mouse.row)
+                    {
+                        match target {
+                            ScrollbarClickTarget::Thumb { grab_row_offset } => {
+                                self.drag = Some(DragState {
+                                    target: DragTarget::NotificationListScrollbar {
+                                        grab_row_offset,
+                                    },
+                                });
+                            }
+                            ScrollbarClickTarget::Track { offset_from_bottom } => {
+                                self.set_notification_offset_from_bottom(offset_from_bottom);
+                            }
+                        }
+                        return None;
+                    }
+
+                    if let Some((ws_idx, pane_id)) = self.notification_target_at(mouse.row) {
+                        self.mode = Mode::Terminal;
+                        return Some(MouseAction::FocusPane { ws_idx, pane_id });
+                    }
                 } else if let Some(info) = self.pane_at(mouse.column, mouse.row).cloned() {
                     if self.mode != Mode::Terminal {
                         self.mode = Mode::Terminal;
@@ -769,6 +792,13 @@ impl AppState {
                                 self.agent_panel_offset_for_drag_row(mouse.row, *grab_row_offset)
                             {
                                 self.set_agent_panel_offset_from_bottom(offset_from_bottom);
+                            }
+                        }
+                        DragTarget::NotificationListScrollbar { grab_row_offset } => {
+                            if let Some(offset_from_bottom) =
+                                self.notification_offset_for_drag_row(mouse.row, *grab_row_offset)
+                            {
+                                self.set_notification_offset_from_bottom(offset_from_bottom);
                             }
                         }
                         DragTarget::PaneSplit {
@@ -984,6 +1014,19 @@ impl AppState {
             }
 
             MouseEventKind::ScrollUp if in_sidebar => {
+                let notification_area = self.notification_list_rect();
+                if notification_area != Rect::default()
+                    && mouse.row >= notification_area.y
+                    && mouse.row < notification_area.y + notification_area.height
+                {
+                    if crate::ui::should_show_scrollbar(crate::ui::notification_scroll_metrics(
+                        self,
+                        notification_area,
+                    )) {
+                        self.scroll_notifications(-1);
+                    }
+                    return None;
+                }
                 let agent_area = self.agent_panel_rect();
                 let over_agent_panel = agent_area != Rect::default()
                     && mouse.row >= agent_area.y
@@ -1003,6 +1046,19 @@ impl AppState {
                 }
             }
             MouseEventKind::ScrollDown if in_sidebar => {
+                let notification_area = self.notification_list_rect();
+                if notification_area != Rect::default()
+                    && mouse.row >= notification_area.y
+                    && mouse.row < notification_area.y + notification_area.height
+                {
+                    if crate::ui::should_show_scrollbar(crate::ui::notification_scroll_metrics(
+                        self,
+                        notification_area,
+                    )) {
+                        self.scroll_notifications(1);
+                    }
+                    return None;
+                }
                 let agent_area = self.agent_panel_rect();
                 let over_agent_panel = agent_area != Rect::default()
                     && mouse.row >= agent_area.y

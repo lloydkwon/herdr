@@ -2303,6 +2303,13 @@
                 "null"
               ]
             },
+            "pane_id": {
+              "description": "Pane the notification speaks for, so the history can name the agent that\nraised it. Optional: a caller outside any pane is recorded as Herdr's own.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "position": {
               "anyOf": [
                 {
@@ -4531,6 +4538,38 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/NotificationShowParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "notification.list",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "notification.clear",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
             }
           },
           "required": [
@@ -7300,6 +7339,80 @@
             }
           ]
         },
+        "NotificationInfo": {
+          "description": "One entry of the server's notification history.",
+          "properties": {
+            "agent": {
+              "description": "Agent that raised it, absent when nothing in a pane claimed it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "context": {
+              "type": "string"
+            },
+            "pane_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "seq": {
+              "description": "Monotonic within a server run; newer notifications have larger values.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "source": {
+              "$ref": "#/schemas/success_response/$defs/NotificationInfoSource"
+            },
+            "time": {
+              "description": "Local wall-clock time the notification fired, as `HH:MM`.",
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "seq",
+            "time",
+            "source",
+            "title"
+          ],
+          "type": "object"
+        },
+        "NotificationInfoSource": {
+          "oneOf": [
+            {
+              "const": "needs_attention",
+              "description": "Herdr noticed the agent asking for attention.",
+              "type": "string"
+            },
+            {
+              "const": "finished",
+              "description": "Herdr noticed the agent finish.",
+              "type": "string"
+            },
+            {
+              "const": "herdr",
+              "description": "Herdr spoke about itself, such as an installed update.",
+              "type": "string"
+            },
+            {
+              "const": "api",
+              "description": "Something called `notification.show`.",
+              "type": "string"
+            }
+          ]
+        },
         "NotificationShowReason": {
           "enum": [
             "shown",
@@ -9447,6 +9560,43 @@
                 "type",
                 "shown",
                 "reason"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "notifications": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/NotificationInfo"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "notification_list",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "notifications"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "cleared": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "notification_cleared",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "cleared"
               ],
               "type": "object"
             },

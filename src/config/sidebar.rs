@@ -424,11 +424,64 @@ impl Default for SpacesSidebarConfig {
     }
 }
 
+/// `[ui.sidebar.notifications]`.
+///
+/// The agent panel says what every agent is doing right now; this says what they
+/// asked for while nobody was looking. A toast is gone the moment the next one
+/// lands, so without a list the only record of "something needed you at 23:14" is
+/// the memory of a sound.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct NotificationsSidebarConfig {
+    /// Show the notifications section under the agent panel. Default: true.
+    pub enabled: bool,
+    /// Rows the section takes from the bottom of the sidebar. Default: 8.
+    ///
+    /// Below `MIN_NOTIFICATIONS_HEIGHT` there is no room for a divider, a header
+    /// and an entry, so the section hides itself rather than render a stub.
+    pub height: u16,
+    /// Notifications kept in memory. Default: 200.
+    pub limit: usize,
+}
+
+/// A divider, a header and one entry. Anything shorter is not a list.
+pub const MIN_NOTIFICATIONS_HEIGHT: u16 = 3;
+const DEFAULT_NOTIFICATIONS_HEIGHT: u16 = 8;
+const DEFAULT_NOTIFICATIONS_LIMIT: usize = 200;
+/// Keeps a typo like `limit = 100000` from pinning a session's memory to history.
+const MAX_NOTIFICATIONS_LIMIT: usize = 2000;
+
+impl Default for NotificationsSidebarConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            height: DEFAULT_NOTIFICATIONS_HEIGHT,
+            limit: DEFAULT_NOTIFICATIONS_LIMIT,
+        }
+    }
+}
+
+impl NotificationsSidebarConfig {
+    /// Rows to reserve at the bottom of the sidebar, or 0 when the section is off.
+    pub fn reserved_height(&self) -> u16 {
+        if !self.enabled || self.height < MIN_NOTIFICATIONS_HEIGHT {
+            return 0;
+        }
+        self.height
+    }
+
+    /// The configured cap, clamped so a bad value cannot grow without bound.
+    pub fn effective_limit(&self) -> usize {
+        self.limit.clamp(1, MAX_NOTIFICATIONS_LIMIT)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct SidebarConfig {
     pub agents: AgentsSidebarConfig,
     pub spaces: SpacesSidebarConfig,
+    pub notifications: NotificationsSidebarConfig,
 }
 
 #[cfg(test)]
@@ -644,5 +697,45 @@ rows = [[{ token = "git_status", fg = "#ff00aa" }], [{ token = "$jj", bold = tru
                 "accepted key {key:?}"
             );
         }
+    }
+
+    #[test]
+    fn notifications_default_to_a_visible_bounded_history() {
+        let config = NotificationsSidebarConfig::default();
+
+        assert!(config.enabled);
+        assert_eq!(config.reserved_height(), 8);
+        assert_eq!(config.effective_limit(), 200);
+    }
+
+    // Turning the section off must not be expressible only one way: a height of
+    // zero is the same intent as `enabled = false`, and so is anything too short
+    // to hold a divider, a header and one entry.
+    #[test]
+    fn notifications_reserve_nothing_when_hidden_or_too_short() {
+        for input in [
+            "[ui.sidebar.notifications]\nenabled = false",
+            "[ui.sidebar.notifications]\nheight = 0",
+            "[ui.sidebar.notifications]\nheight = 2",
+        ] {
+            let config: crate::config::Config = toml::from_str(input).expect("parses");
+            assert_eq!(
+                config.ui.sidebar.notifications.reserved_height(),
+                0,
+                "{input}"
+            );
+        }
+    }
+
+    // A typo in the limit should cost bounded memory, not a session's worth.
+    #[test]
+    fn notification_limit_is_clamped_at_both_ends() {
+        let huge: crate::config::Config =
+            toml::from_str("[ui.sidebar.notifications]\nlimit = 100000").expect("parses");
+        let zero: crate::config::Config =
+            toml::from_str("[ui.sidebar.notifications]\nlimit = 0").expect("parses");
+
+        assert_eq!(huge.ui.sidebar.notifications.effective_limit(), 2000);
+        assert_eq!(zero.ui.sidebar.notifications.effective_limit(), 1);
     }
 }

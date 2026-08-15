@@ -404,6 +404,19 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # row_gap = 0
 # rows = [["state_icon", "workspace"], ["branch", "git_status"]]
 
+# Notifications that already fired, newest first, under the agent panel.
+# A toast is gone as soon as the next one lands; this is what is left of it.
+# The section takes only the rows it has entries for, so a session nothing has
+# called for takes none at all.
+# [ui.sidebar.notifications]
+# Show the section. Notifications are still recorded when false, and `herdr
+# notification list` still reports them.
+# enabled = true
+# Most rows the section may take from the bottom of the sidebar. Two rows per entry.
+# height = 8
+# Notifications kept in memory. Not saved across server restarts.
+# limit = 200
+
 # Accent color for highlights, borders, and navigation UI.
 # Accepts: hex (#89b4fa), named colors (cyan, blue, magenta), or rgb(r,g,b)
 # accent = "cyan"

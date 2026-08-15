@@ -96,10 +96,16 @@ herdr server reload-agent-manifests
 ## Notifications
 
 ```bash
-herdr notification show <title> [--body TEXT] [--position top-left|top-right|bottom-left|bottom-right] [--sound none|done|request]
+herdr notification show <title> [--body TEXT] [--pane PANE_ID] [--position top-left|top-right|bottom-left|bottom-right] [--sound none|done|request]
+herdr notification list
+herdr notification clear
 ```
 
 `notification show` uses the configured `[ui.toast]` delivery. `--position` only affects in-app Herdr toasts. `--sound` defaults to `none`; `done` and `request` play the existing finished and needs-attention sounds only when the notification is shown.
+
+`--pane` names the pane the notification speaks for, so the history can attribute it to that agent. It defaults to `HERDR_PANE_ID`, which means an agent calling this from inside its own pane is attributed automatically. A call from outside any pane is recorded as Herdr's own.
+
+`notification list` reports shown notifications, newest first, with the agent, time, and source of each. `notification clear` empties the history. Both work regardless of `[ui.sidebar.notifications]`, which only controls whether the sidebar shows the same list.
 
 ## Sessions
 

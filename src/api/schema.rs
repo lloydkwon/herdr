@@ -57,6 +57,10 @@ pub enum Method {
     ServerReloadAgentManifests(EmptyParams),
     #[serde(rename = "notification.show")]
     NotificationShow(NotificationShowParams),
+    #[serde(rename = "notification.list")]
+    NotificationList(EmptyParams),
+    #[serde(rename = "notification.clear")]
+    NotificationClear(EmptyParams),
     #[serde(rename = "client.window_title.set")]
     ClientWindowTitleSet(ClientWindowTitleSetParams),
     #[serde(rename = "client.window_title.clear")]

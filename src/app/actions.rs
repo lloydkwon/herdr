@@ -197,14 +197,6 @@ fn toast_agent_label(agent_label: &str) -> &str {
     agent_label
 }
 
-fn toast_event_text(kind: ToastKind) -> &'static str {
-    match kind {
-        ToastKind::NeedsAttention => "needs attention",
-        ToastKind::Finished => "finished",
-        ToastKind::UpdateInstalled => "updated",
-    }
-}
-
 fn sound_for_toast_kind(
     kind: ToastKind,
     suppress_active_tab_notifications: bool,
@@ -3238,7 +3230,7 @@ impl AppState {
                 title: format!(
                     "{} {}",
                     toast_agent_label(&agent_label),
-                    toast_event_text(kind)
+                    crate::app::state::toast_event_text(kind)
                 ),
                 context,
                 position: None,
@@ -3282,6 +3274,43 @@ impl AppState {
                 self.toast = Some(toast);
             }
         }
+
+        self.record_agent_notification(delivery);
+    }
+
+    /// Keeps a delivered agent notification in the history.
+    ///
+    /// Every delivery lands here, whatever the configured toast surface is, so
+    /// the list stays honest for someone running with toasts off and sound on.
+    fn record_agent_notification(&mut self, delivery: &AgentNotificationDelivery) {
+        // A sound-only delivery has no toast to borrow context from; the title is
+        // still reconstructable from the fields the delivery already carries.
+        let surfaced = delivery
+            .toast
+            .as_ref()
+            .or(delivery.client_notification.as_ref());
+        let title = surfaced
+            .map(|toast| toast.title.clone())
+            .unwrap_or_else(|| {
+                format!(
+                    "{} {}",
+                    toast_agent_label(&delivery.agent_label),
+                    crate::app::state::toast_event_text(delivery.kind)
+                )
+            });
+        let context = surfaced
+            .map(|toast| toast.context.clone())
+            .unwrap_or_default();
+
+        self.record_notification(
+            crate::app::state::NotificationSource::AgentState(delivery.kind),
+            Some(delivery.agent_label.clone()),
+            delivery.known_agent,
+            Some(delivery.workspace_id.clone()),
+            Some(delivery.pane_id),
+            title,
+            context,
+        );
     }
 
     pub fn next_pending_agent_notification_deadline(&self) -> Option<std::time::Instant> {

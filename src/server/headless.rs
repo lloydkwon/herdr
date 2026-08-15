@@ -10944,6 +10944,7 @@ next_tab = ""
                     api::schema::NotificationShowParams {
                         title: "build failed".into(),
                         body: Some("api workspace".into()),
+                        pane_id: None,
                         position: Some(crate::config::ToastHerdrPosition::TopLeft),
                         sound: api::schema::NotificationShowSound::Request,
                     },
@@ -11031,6 +11032,7 @@ next_tab = ""
                     api::schema::NotificationShowParams {
                         title: "build: failed".into(),
                         body: Some("api workspace".into()),
+                        pane_id: None,
                         position: None,
                         sound: api::schema::NotificationShowSound::None,
                     },
@@ -11084,6 +11086,7 @@ next_tab = ""
                     api::schema::NotificationShowParams {
                         title: "\n\t".into(),
                         body: None,
+                        pane_id: None,
                         position: None,
                         sound: api::schema::NotificationShowSound::None,
                     },
@@ -11117,6 +11120,7 @@ next_tab = ""
                     api::schema::NotificationShowParams {
                         title: "build failed".into(),
                         body: None,
+                        pane_id: None,
                         position: None,
                         sound: api::schema::NotificationShowSound::Request,
                     },
@@ -11155,6 +11159,7 @@ next_tab = ""
                         api::schema::NotificationShowParams {
                             title: "build failed".into(),
                             body: None,
+                            pane_id: None,
                             position: None,
                             sound: api::schema::NotificationShowSound::None,
                         },
@@ -11212,6 +11217,7 @@ next_tab = ""
                         api::schema::NotificationShowParams {
                             title: "build failed".into(),
                             body: None,
+                            pane_id: None,
                             position: None,
                             sound: api::schema::NotificationShowSound::Done,
                         },

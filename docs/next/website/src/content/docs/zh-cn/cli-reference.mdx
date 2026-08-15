@@ -92,10 +92,16 @@ herdr server reload-agent-manifests
 ## 通知
 
 ```bash
-herdr notification show <title> [--body TEXT] [--position top-left|top-right|bottom-left|bottom-right] [--sound none|done|request]
+herdr notification show <title> [--body TEXT] [--pane PANE_ID] [--position top-left|top-right|bottom-left|bottom-right] [--sound none|done|request]
+herdr notification list
+herdr notification clear
 ```
 
 `notification show` 使用配置的 `[ui.toast]` 投递方式。`--position` 只影响 Herdr 应用内的 toast。`--sound` 默认为 `none`;`done` 和 `request` 只在通知实际显示时播放已有的完成音和需要关注音。
+
+`--pane` 指明通知代表哪个面板，这样历史记录才能把它归到对应的智能体名下。默认值取自 `HERDR_PANE_ID`，因此智能体在自己的面板中调用时会自动归属。来自面板之外的调用记为 Herdr 自身的通知。
+
+`notification list` 按时间倒序返回已显示的通知，包含智能体、时间和来源。`notification clear` 清空历史。两者都与 `[ui.sidebar.notifications]` 无关，该配置只控制侧边栏是否显示同一份列表。
 
 ## 会话
 

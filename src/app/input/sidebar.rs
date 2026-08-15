@@ -10,7 +10,10 @@ impl AppState {
         if self.sidebar_collapsed || sidebar.width <= 1 || sidebar.height == 0 {
             return Rect::default();
         }
-        crate::ui::workspace_list_rect(sidebar, self.sidebar_section_split)
+        crate::ui::workspace_list_rect(
+            crate::ui::sidebar_body_rect(sidebar, self),
+            self.sidebar_section_split,
+        )
     }
 
     pub(super) fn agent_panel_rect(&self) -> Rect {
@@ -18,9 +21,19 @@ impl AppState {
         if self.sidebar_collapsed || sidebar.width <= 1 || sidebar.height == 0 {
             return Rect::default();
         }
-        let (_, detail_area) =
-            crate::ui::expanded_sidebar_sections(sidebar, self.sidebar_section_split);
+        let (_, detail_area) = crate::ui::expanded_sidebar_sections(
+            crate::ui::sidebar_body_rect(sidebar, self),
+            self.sidebar_section_split,
+        );
         detail_area
+    }
+
+    pub(super) fn notification_list_rect(&self) -> Rect {
+        let sidebar = self.view.sidebar_rect;
+        if self.sidebar_collapsed || sidebar.width <= 1 || sidebar.height == 0 {
+            return Rect::default();
+        }
+        crate::ui::sidebar_notifications_rect(sidebar, self)
     }
 
     pub(super) fn workspace_list_scrollbar_target_at(
@@ -277,7 +290,7 @@ impl AppState {
             return false;
         }
         let rect = crate::ui::sidebar_section_divider_rect(
-            self.view.sidebar_rect,
+            crate::ui::sidebar_body_rect(self.view.sidebar_rect, self),
             self.sidebar_section_split,
         );
         rect.width > 0
@@ -519,6 +532,104 @@ impl AppState {
         }
         None
     }
+
+    pub(super) fn scroll_notifications(&mut self, delta: i16) {
+        let area = self.notification_list_rect();
+        let max_scroll = crate::ui::notification_scroll_metrics(self, area).max_offset_from_bottom;
+        if delta.is_negative() {
+            self.notification_scroll = self
+                .notification_scroll
+                .saturating_sub(delta.unsigned_abs() as usize);
+        } else {
+            self.notification_scroll = self
+                .notification_scroll
+                .saturating_add(delta as usize)
+                .min(max_scroll);
+        }
+    }
+
+    pub(super) fn notification_scrollbar_target_at(
+        &self,
+        col: u16,
+        row: u16,
+    ) -> Option<ScrollbarClickTarget> {
+        let area = self.notification_list_rect();
+        let metrics = crate::ui::notification_scroll_metrics(self, area);
+        let track = crate::ui::notification_scrollbar_rect(self, area)?;
+        if col < track.x
+            || col >= track.x + track.width
+            || row < track.y
+            || row >= track.y + track.height
+        {
+            return None;
+        }
+        if let Some(grab_row_offset) = crate::ui::scrollbar_thumb_grab_offset(metrics, track, row) {
+            Some(ScrollbarClickTarget::Thumb { grab_row_offset })
+        } else {
+            Some(ScrollbarClickTarget::Track {
+                offset_from_bottom: crate::ui::scrollbar_offset_from_row(metrics, track, row),
+            })
+        }
+    }
+
+    pub(super) fn notification_offset_for_drag_row(
+        &self,
+        row: u16,
+        grab_row_offset: u16,
+    ) -> Option<usize> {
+        let area = self.notification_list_rect();
+        let metrics = crate::ui::notification_scroll_metrics(self, area);
+        let track = crate::ui::notification_scrollbar_rect(self, area)?;
+        Some(crate::ui::scrollbar_offset_from_drag_row(
+            metrics,
+            track,
+            row,
+            grab_row_offset,
+        ))
+    }
+
+    pub(super) fn set_notification_offset_from_bottom(&mut self, offset_from_bottom: usize) {
+        let area = self.notification_list_rect();
+        let metrics = crate::ui::notification_scroll_metrics(self, area);
+        self.notification_scroll = metrics
+            .max_offset_from_bottom
+            .saturating_sub(offset_from_bottom);
+    }
+
+    /// The pane a clicked notification points back at.
+    ///
+    /// An entry whose pane is gone stays in the list — it is a record, not a
+    /// link — and simply answers None.
+    pub(super) fn notification_target_at(
+        &self,
+        row: u16,
+    ) -> Option<(usize, crate::layout::PaneId)> {
+        if self.sidebar_collapsed {
+            return None;
+        }
+
+        let area = self.notification_list_rect();
+        let metrics = crate::ui::notification_scroll_metrics(self, area);
+        let body =
+            crate::ui::notification_body_rect(area, crate::ui::should_show_scrollbar(metrics));
+        if body.height == 0 || row < body.y || row >= body.y + body.height {
+            return None;
+        }
+
+        let entry_rows = crate::ui::notification_entry_rows(body.height);
+        let index = usize::from((row - body.y) / entry_rows)
+            .saturating_add(self.notification_scroll.min(metrics.max_offset_from_bottom));
+        let record = self.notification_history.get(index)?;
+        let (workspace_id, pane_id) = record.target()?;
+        let ws_idx = self
+            .workspaces
+            .iter()
+            .position(|ws| ws.id == workspace_id)?;
+        self.workspaces
+            .get(ws_idx)?
+            .pane_state(pane_id)
+            .map(|_| (ws_idx, pane_id))
+    }
 }
 
 #[cfg(test)]
@@ -743,6 +854,69 @@ mod tests {
             snapshot.workspaces[0].tabs[first_tab].focused,
             Some(second_pane.raw())
         );
+    }
+
+    #[test]
+    fn clicking_a_notification_focuses_the_pane_it_came_from() {
+        let mut app = app_for_mouse_test();
+        let first = Workspace::test_new("one");
+        let second = Workspace::test_new("two");
+        let second_pane = second.tabs[0].root_pane;
+        let second_id = second.id.clone();
+        app.state.workspaces = vec![first, second];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        app.state.record_notification(
+            crate::app::state::NotificationSource::AgentState(
+                crate::app::state::ToastKind::NeedsAttention,
+            ),
+            Some("claude".into()),
+            None,
+            Some(second_id),
+            Some(second_pane),
+            "claude needs attention".into(),
+            String::new(),
+        );
+
+        let section = app.state.notification_list_rect();
+        assert_ne!(section, Rect::default(), "the section should be visible");
+        let body = crate::ui::notification_body_rect(section, false);
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2, body.y));
+
+        assert_eq!(app.state.active, Some(1));
+        assert_eq!(
+            app.state.workspaces[1].tabs[0].layout.focused(),
+            second_pane
+        );
+        assert_eq!(app.state.mode, Mode::Terminal);
+    }
+
+    // A record outlives the pane it names, so a dead address must not focus
+    // whatever pane happens to hold that id now.
+    #[test]
+    fn a_notification_for_a_closed_pane_does_not_focus_anything() {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = vec![Workspace::test_new("one")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.record_notification(
+            crate::app::state::NotificationSource::AgentState(
+                crate::app::state::ToastKind::NeedsAttention,
+            ),
+            Some("claude".into()),
+            None,
+            Some("gone".into()),
+            Some(crate::layout::PaneId::from_raw(9999)),
+            "claude needs attention".into(),
+            String::new(),
+        );
+
+        let section = app.state.notification_list_rect();
+        let body = crate::ui::notification_body_rect(section, false);
+
+        assert_eq!(app.state.notification_target_at(body.y), None);
     }
 
     #[test]

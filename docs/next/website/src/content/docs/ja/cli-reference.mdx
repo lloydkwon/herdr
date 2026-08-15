@@ -92,10 +92,16 @@ herdr server reload-agent-manifests
 ## 通知
 
 ```bash
-herdr notification show <title> [--body TEXT] [--position top-left|top-right|bottom-left|bottom-right] [--sound none|done|request]
+herdr notification show <title> [--body TEXT] [--pane PANE_ID] [--position top-left|top-right|bottom-left|bottom-right] [--sound none|done|request]
+herdr notification list
+herdr notification clear
 ```
 
 `notification show` は設定済みの `[ui.toast]` 配信を使います。`--position` はアプリ内の Herdr トーストにのみ影響します。`--sound` のデフォルトは `none` で、`done` と `request` は通知が表示されたときにのみ、既存の完了音と要注意音を再生します。
+
+`--pane` は通知の発信元となるペインを指定し、履歴がその通知をエージェントに紐づけられるようにします。デフォルトは `HERDR_PANE_ID` なので、自分のペインの中から呼び出したエージェントは自動的に紐づきます。ペインの外からの呼び出しは Herdr 自身の通知として記録されます。
+
+`notification list` は表示された通知を新しい順に、エージェント・時刻・種別とともに返します。`notification clear` は履歴を空にします。どちらも `[ui.sidebar.notifications]` の設定に関係なく動作します。この設定はサイドバーに同じ一覧を表示するかどうかだけを制御します。
 
 ## セッション
 

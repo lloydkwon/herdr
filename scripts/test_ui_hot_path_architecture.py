@@ -29,6 +29,10 @@ FORBIDDEN_CALLS = (
         re.compile(r"\bforeground_job\s*\("),
         "process-tree inspection",
     ),
+    (
+        re.compile(r"\blocal_datetime\s*\("),
+        "wall-clock formatting; stamp the value when the event happens",
+    ),
 )
 
 

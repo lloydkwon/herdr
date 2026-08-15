@@ -27,6 +27,16 @@ enum RuntimeExitAction {
     ClosePane,
 }
 
+/// Who an API notification belongs to, resolved once before delivery decides
+/// whether it is shown.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct NotificationOrigin {
+    agent_label: Option<String>,
+    known_agent: Option<crate::detect::Agent>,
+    workspace_id: Option<String>,
+    pane_id: Option<crate::layout::PaneId>,
+}
+
 impl App {
     pub(crate) fn dispatch_api_request(
         &mut self,
@@ -1000,6 +1010,20 @@ impl App {
             Method::NotificationShow(params) => {
                 return self.handle_notification_show(request.id, params);
             }
+            Method::NotificationList(_) => SuccessResponse {
+                id: request.id,
+                result: ResponseResult::NotificationList {
+                    notifications: self.notification_history_info(),
+                },
+            },
+            Method::NotificationClear(_) => {
+                let cleared = self.state.notification_history.len();
+                self.state.clear_notification_history();
+                SuccessResponse {
+                    id: request.id,
+                    result: ResponseResult::NotificationCleared { cleared },
+                }
+            }
             Method::ClientWindowTitleSet(_) | Method::ClientWindowTitleClear(_) => {
                 return responses::encode_success(
                     request.id,
@@ -1228,6 +1252,9 @@ impl App {
             .body
             .as_deref()
             .and_then(|body| sanitized_notification_text(body, 240));
+        let recorded_title = title.clone();
+        let recorded_body = body.clone().unwrap_or_default();
+        let origin = self.notification_origin(params.pane_id.as_deref());
 
         let reason = match self.state.toast_config.delivery {
             crate::config::ToastDelivery::Off => NotificationShowReason::Disabled,
@@ -1276,6 +1303,21 @@ impl App {
             }
         };
 
+        // Only what actually reached the user is history. A notification the
+        // config turned off or the rate limiter swallowed was never shown, and
+        // logging it would make the list disagree with what happened.
+        if matches!(reason, NotificationShowReason::Shown) {
+            self.state.record_notification(
+                crate::app::state::NotificationSource::Api,
+                origin.agent_label,
+                origin.known_agent,
+                origin.workspace_id,
+                origin.pane_id,
+                recorded_title,
+                recorded_body,
+            );
+        }
+
         responses::encode_success(
             id,
             ResponseResult::NotificationShow {
@@ -1283,6 +1325,75 @@ impl App {
                 reason,
             },
         )
+    }
+
+    /// The notification history as the API reports it, newest first.
+    ///
+    /// The list is a shared runtime fact, not a sidebar detail, so any client can
+    /// ask for it without going through the TUI.
+    fn notification_history_info(&self) -> Vec<crate::api::schema::NotificationInfo> {
+        use crate::api::schema::{NotificationInfo, NotificationInfoSource};
+        use crate::app::state::{NotificationSource, ToastKind};
+
+        self.state
+            .notification_history
+            .iter()
+            .map(|record| NotificationInfo {
+                seq: record.seq,
+                time: record.time_label.clone(),
+                source: match record.source {
+                    NotificationSource::AgentState(ToastKind::NeedsAttention) => {
+                        NotificationInfoSource::NeedsAttention
+                    }
+                    NotificationSource::AgentState(ToastKind::Finished) => {
+                        NotificationInfoSource::Finished
+                    }
+                    NotificationSource::AgentState(ToastKind::UpdateInstalled) => {
+                        NotificationInfoSource::Herdr
+                    }
+                    NotificationSource::Api => NotificationInfoSource::Api,
+                },
+                agent: record.agent_label.clone(),
+                workspace_id: record.workspace_id.clone(),
+                // A pane that has since closed leaves the entry without one; the
+                // record stays, it just no longer points anywhere.
+                pane_id: record.pane_id.and_then(|pane_id| {
+                    let ws_idx = self
+                        .state
+                        .workspaces
+                        .iter()
+                        .position(|ws| Some(&ws.id) == record.workspace_id.as_ref())?;
+                    self.public_pane_id(ws_idx, pane_id)
+                }),
+                title: record.title.clone(),
+                context: record.context.clone(),
+            })
+            .collect()
+    }
+
+    /// Resolves the pane an API notification speaks for into the identity the
+    /// history needs. An unknown or absent pane is not an error: the entry is
+    /// simply recorded without an agent.
+    fn notification_origin(&self, pane_id: Option<&str>) -> NotificationOrigin {
+        let Some((ws_idx, pane_id)) = pane_id.and_then(|pane_id| self.parse_pane_id(pane_id))
+        else {
+            return NotificationOrigin::default();
+        };
+        let Some(ws) = self.state.workspaces.get(ws_idx) else {
+            return NotificationOrigin::default();
+        };
+        let terminal = ws
+            .pane_state(pane_id)
+            .and_then(|pane| self.state.terminals.get(&pane.attached_terminal_id));
+
+        NotificationOrigin {
+            agent_label: terminal
+                .and_then(|terminal| terminal.effective_agent_label())
+                .map(str::to_string),
+            known_agent: terminal.and_then(|terminal| terminal.effective_known_agent()),
+            workspace_id: Some(ws.id.clone()),
+            pane_id: Some(pane_id),
+        }
     }
 
     fn emit_api_notification_sound(&self, sound: crate::api::schema::NotificationShowSound) {

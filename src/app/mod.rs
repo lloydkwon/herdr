@@ -615,6 +615,9 @@ impl App {
             config_diagnostic,
             toast: None,
             pending_agent_notifications: std::collections::HashMap::new(),
+            notification_history: std::collections::VecDeque::new(),
+            notification_seq: 0,
+            notification_scroll: 0,
             copy_feedback: None,
             outer_terminal_focus: None,
             prefix_code,
@@ -635,6 +638,7 @@ impl App {
             agent_view_override: None,
             sidebar_agents: config.ui.sidebar.agents.clone(),
             sidebar_spaces: config.ui.sidebar.spaces.clone(),
+            sidebar_notifications: config.ui.sidebar.notifications.clone(),
             next_agent_state_change_seq: 0,
             mouse_capture: config.ui.mouse_capture,
             copy_on_select: config.ui.copy_on_select,
@@ -1510,7 +1514,12 @@ impl App {
                 self.state.status_indicators = config.ui.status_indicators;
                 self.state.sidebar_agents = config.ui.sidebar.agents.clone();
                 self.state.sidebar_spaces = config.ui.sidebar.spaces.clone();
+                self.state.sidebar_notifications = config.ui.sidebar.notifications.clone();
+                // A smaller limit has to take effect now, not once enough new
+                // notifications arrive to push the old ones out.
+                self.state.trim_notification_history();
                 self.state.agent_panel_scroll = 0;
+                self.state.notification_scroll = 0;
                 self.state.accent = crate::config::parse_color(&config.ui.accent);
                 if !self.state.local_sound_playback && self.state.sound != config.ui.sound {
                     self.state.request_client_config_reload = true;
@@ -2521,6 +2530,7 @@ mod tests {
                     crate::api::schema::NotificationShowParams {
                         title: "build failed".into(),
                         body: Some("api workspace".into()),
+                        pane_id: None,
                         position: Some(crate::config::ToastHerdrPosition::TopLeft),
                         sound: crate::api::schema::NotificationShowSound::None,
                     },
@@ -2557,6 +2567,7 @@ mod tests {
                     crate::api::schema::NotificationShowParams {
                         title: "build failed".into(),
                         body: None,
+                        pane_id: None,
                         position: None,
                         sound: crate::api::schema::NotificationShowSound::None,
                     },
@@ -2589,6 +2600,7 @@ mod tests {
                     crate::api::schema::NotificationShowParams {
                         title: "build failed".into(),
                         body: None,
+                        pane_id: None,
                         position: None,
                         sound: crate::api::schema::NotificationShowSound::None,
                     },
@@ -2604,6 +2616,143 @@ mod tests {
             }
         );
         assert!(app.state.toast.is_none());
+    }
+
+    // Whoever raised the notification is the point of the history, so the pane
+    // the call came from has to survive into the record.
+    #[test]
+    fn notification_show_api_records_the_calling_agent() {
+        let mut app = test_app();
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        let workspace = Workspace::test_new("notify-origin");
+        let pane = workspace.tabs[0].root_pane;
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane]
+            .attached_terminal_id
+            .clone();
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .detected_agent = Some(crate::detect::Agent::Claude);
+        let pane_id = app.public_pane_id(0, pane).unwrap();
+
+        app.handle_api_request_after_internal_events_drained(crate::api::schema::Request {
+            id: "notify".into(),
+            method: crate::api::schema::Method::NotificationShow(
+                crate::api::schema::NotificationShowParams {
+                    title: "build failed".into(),
+                    body: Some("api workspace".into()),
+                    pane_id: Some(pane_id),
+                    position: None,
+                    sound: crate::api::schema::NotificationShowSound::None,
+                },
+            ),
+        });
+
+        assert_eq!(app.state.notification_history.len(), 1);
+        let record = &app.state.notification_history[0];
+        assert_eq!(record.agent_label.as_deref(), Some("claude"));
+        assert_eq!(record.pane_id, Some(pane));
+        assert_eq!(record.title, "build failed");
+        assert_eq!(record.context, "api workspace");
+        assert!(matches!(
+            record.source,
+            crate::app::state::NotificationSource::Api
+        ));
+    }
+
+    // A call from outside any pane belongs to nobody in particular. It is still
+    // history, just Herdr's own.
+    #[test]
+    fn notification_show_api_records_an_unattributed_call() {
+        let mut app = test_app();
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+
+        app.handle_api_request_after_internal_events_drained(crate::api::schema::Request {
+            id: "notify".into(),
+            method: crate::api::schema::Method::NotificationShow(
+                crate::api::schema::NotificationShowParams {
+                    title: "build failed".into(),
+                    body: None,
+                    pane_id: None,
+                    position: None,
+                    sound: crate::api::schema::NotificationShowSound::None,
+                },
+            ),
+        });
+
+        assert_eq!(app.state.notification_history.len(), 1);
+        assert!(app.state.notification_history[0].agent_label.is_none());
+    }
+
+    // Nothing was announced, so there is nothing to remember. Recording it would
+    // make the list disagree with what the user actually saw.
+    #[test]
+    fn a_notification_that_was_never_shown_is_not_recorded() {
+        let mut app = test_app();
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Off;
+
+        app.handle_api_request_after_internal_events_drained(crate::api::schema::Request {
+            id: "notify".into(),
+            method: crate::api::schema::Method::NotificationShow(
+                crate::api::schema::NotificationShowParams {
+                    title: "build failed".into(),
+                    body: None,
+                    pane_id: None,
+                    position: None,
+                    sound: crate::api::schema::NotificationShowSound::None,
+                },
+            ),
+        });
+
+        assert!(app.state.notification_history.is_empty());
+    }
+
+    #[test]
+    fn notification_list_and_clear_report_and_empty_the_history() {
+        let mut app = test_app();
+        app.state.record_notification(
+            crate::app::state::NotificationSource::AgentState(
+                crate::app::state::ToastKind::NeedsAttention,
+            ),
+            Some("claude".into()),
+            None,
+            None,
+            None,
+            "claude needs attention".into(),
+            String::new(),
+        );
+
+        let listed =
+            app.handle_api_request_after_internal_events_drained(crate::api::schema::Request {
+                id: "list".into(),
+                method: crate::api::schema::Method::NotificationList(Default::default()),
+            });
+        let parsed: crate::api::schema::SuccessResponse = serde_json::from_str(&listed).unwrap();
+        let crate::api::schema::ResponseResult::NotificationList { notifications } = parsed.result
+        else {
+            panic!("expected a notification list");
+        };
+        assert_eq!(notifications.len(), 1);
+        assert_eq!(notifications[0].agent.as_deref(), Some("claude"));
+        assert_eq!(
+            notifications[0].source,
+            crate::api::schema::NotificationInfoSource::NeedsAttention
+        );
+
+        let cleared =
+            app.handle_api_request_after_internal_events_drained(crate::api::schema::Request {
+                id: "clear".into(),
+                method: crate::api::schema::Method::NotificationClear(Default::default()),
+            });
+        let parsed: crate::api::schema::SuccessResponse = serde_json::from_str(&cleared).unwrap();
+        assert_eq!(
+            parsed.result,
+            crate::api::schema::ResponseResult::NotificationCleared { cleared: 1 }
+        );
+        assert!(app.state.notification_history.is_empty());
     }
 
     #[test]
@@ -2625,6 +2774,7 @@ mod tests {
                     crate::api::schema::NotificationShowParams {
                         title: "build failed".into(),
                         body: None,
+                        pane_id: None,
                         position: None,
                         sound: crate::api::schema::NotificationShowSound::None,
                     },
@@ -2658,6 +2808,7 @@ mod tests {
                     crate::api::schema::NotificationShowParams {
                         title: "build failed".into(),
                         body: None,
+                        pane_id: None,
                         position: None,
                         sound: crate::api::schema::NotificationShowSound::None,
                     },

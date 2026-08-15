@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::agents::AgentInfo;
-use super::common::{ClientWindowTitleReason, NotificationShowReason};
+use super::common::{ClientWindowTitleReason, NotificationInfo, NotificationShowReason};
 use super::events::EventEnvelope;
 use super::integrations::{
     IntegrationInstallResult, IntegrationTarget, IntegrationUninstallResult,
@@ -205,6 +205,12 @@ pub enum ResponseResult {
     NotificationShow {
         shown: bool,
         reason: NotificationShowReason,
+    },
+    NotificationList {
+        notifications: Vec<NotificationInfo>,
+    },
+    NotificationCleared {
+        cleared: usize,
     },
     ClientWindowTitle {
         changed: bool,

@@ -298,12 +298,13 @@ fn tab_command() -> Command {
 
 fn notification_command() -> Command {
     Command::new("notification")
-        .about("Show Herdr notifications")
+        .about("Show and inspect Herdr notifications")
         .subcommand(
             Command::new("show")
                 .about("Show a notification")
                 .arg(required("title", "TITLE"))
                 .arg(option("body", "TEXT"))
+                .arg(option("pane", "PANE_ID"))
                 .arg(option("position", "POSITION").value_parser([
                     "top-left",
                     "top-right",
@@ -312,6 +313,8 @@ fn notification_command() -> Command {
                 ]))
                 .arg(option("sound", "SOUND").value_parser(["none", "done", "request"])),
         )
+        .subcommand(Command::new("list").about("List recorded notifications"))
+        .subcommand(Command::new("clear").about("Clear the notification history"))
 }
 
 fn agent_command() -> Command {

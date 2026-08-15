@@ -19,6 +19,14 @@ use crate::terminal::TerminalRuntimeRegistry;
 
 const WORKSPACE_SECTION_HEADER_ROWS: u16 = 2;
 const AGENT_PANEL_HEADER_ROWS: u16 = 3;
+/// Divider plus header. The notification list needs no sort control, so it costs
+/// one row less than the agent panel.
+const NOTIFICATION_PANEL_HEADER_ROWS: u16 = 2;
+/// Time and who raised it, then what it said.
+const NOTIFICATION_ENTRY_ROWS: u16 = 2;
+/// What the two sections above need before the bottom one may take anything:
+/// `sidebar_section_heights` only splits properly from six rows up.
+const SIDEBAR_BODY_MIN_HEIGHT: u16 = 6;
 
 pub(crate) struct AgentPanelEntry {
     pub ws_idx: usize,
@@ -54,6 +62,63 @@ fn sidebar_section_heights(total_h: u16, split_ratio: f32) -> (u16, u16) {
     let ws_h = ws_h.clamp(3, total_h.saturating_sub(3));
     let detail_h = total_h.saturating_sub(ws_h);
     (ws_h, detail_h)
+}
+
+/// Rows the notification section takes from the bottom of the sidebar.
+///
+/// The spaces and agents sections are the ones a user navigates with; this one
+/// is a record. So it yields on both sides: it grows only to what it actually has
+/// to show, never past the configured maximum, and never into rows the two
+/// sections above need. A session that has not been called takes no rows at all,
+/// which is also why turning the feature on costs a quiet session nothing.
+fn notification_section_height(area: Rect, app: &AppState) -> u16 {
+    let entries = app.notification_history.len();
+    let maximum = app.sidebar_notifications.reserved_height();
+    if entries == 0 || maximum == 0 || area.width == 0 || area.height <= SIDEBAR_BODY_MIN_HEIGHT {
+        return 0;
+    }
+
+    let wanted = NOTIFICATION_PANEL_HEADER_ROWS.saturating_add(
+        u16::try_from(entries)
+            .unwrap_or(u16::MAX)
+            .saturating_mul(NOTIFICATION_ENTRY_ROWS),
+    );
+    let available = area.height.saturating_sub(SIDEBAR_BODY_MIN_HEIGHT);
+    let height = wanted.min(maximum).min(available);
+    if height < crate::config::MIN_NOTIFICATIONS_HEIGHT {
+        return 0;
+    }
+    height
+}
+
+/// The sidebar area left for the spaces and agents sections.
+///
+/// Everything that laid out the sidebar before the notification list existed
+/// keeps working by taking this rect instead of the full one.
+pub(crate) fn sidebar_body_rect(area: Rect, app: &AppState) -> Rect {
+    let height = area
+        .height
+        .saturating_sub(notification_section_height(area, app));
+    Rect::new(area.x, area.y, area.width, height)
+}
+
+pub(crate) fn sidebar_notifications_rect(area: Rect, app: &AppState) -> Rect {
+    let height = notification_section_height(area, app);
+    if height == 0 {
+        return Rect::default();
+    }
+    // The rightmost column carries the sidebar's own separator, same as the
+    // sections above.
+    let width = area.width.saturating_sub(1);
+    if width == 0 {
+        return Rect::default();
+    }
+    Rect::new(
+        area.x,
+        area.y + area.height.saturating_sub(height),
+        width,
+        height,
+    )
 }
 
 pub(crate) fn expanded_sidebar_sections(area: Rect, split_ratio: f32) -> (Rect, Rect) {
@@ -311,7 +376,7 @@ pub(crate) fn next_entry_is_indented_workspace(entries: &[WorkspaceListEntry], i
 }
 
 pub(crate) fn normalized_workspace_scroll(app: &AppState, area: Rect, requested: usize) -> usize {
-    let ws_area = workspace_list_rect(area, app.sidebar_section_split);
+    let ws_area = workspace_list_rect(sidebar_body_rect(area, app), app.sidebar_section_split);
     let body = workspace_list_body_rect(ws_area, false);
     if body.height == 0 {
         return requested;
@@ -655,11 +720,62 @@ pub(crate) fn agent_panel_scrollbar_rect(app: &AppState, area: Rect) -> Option<R
     ))
 }
 
+pub(crate) fn notification_body_rect(area: Rect, has_scrollbar: bool) -> Rect {
+    if area.width == 0 || area.height <= NOTIFICATION_PANEL_HEADER_ROWS {
+        return Rect::default();
+    }
+
+    let body_y = area.y.saturating_add(NOTIFICATION_PANEL_HEADER_ROWS);
+    let body_height = (area.y + area.height).saturating_sub(body_y);
+    let body_width = area.width.saturating_sub(u16::from(has_scrollbar));
+    Rect::new(area.x, body_y, body_width, body_height)
+}
+
+/// Rows one entry occupies. Two when there is room for what the notification
+/// said, one when the section was squeezed down to a single line per entry.
+pub(crate) fn notification_entry_rows(body_height: u16) -> u16 {
+    NOTIFICATION_ENTRY_ROWS.min(body_height.max(1))
+}
+
+pub(crate) fn notification_visible_count(area: Rect, has_scrollbar: bool) -> usize {
+    let body = notification_body_rect(area, has_scrollbar);
+    if body.width == 0 || body.height == 0 {
+        return 0;
+    }
+    (body.height / notification_entry_rows(body.height)) as usize
+}
+
+pub(crate) fn notification_scroll_metrics(
+    app: &AppState,
+    area: Rect,
+) -> crate::pane::ScrollMetrics {
+    let visible = notification_visible_count(area, false);
+    let max_scroll = app.notification_history.len().saturating_sub(visible);
+    let scroll = app.notification_scroll.min(max_scroll);
+
+    crate::pane::ScrollMetrics {
+        offset_from_bottom: max_scroll.saturating_sub(scroll),
+        max_offset_from_bottom: max_scroll,
+        viewport_rows: visible,
+    }
+}
+
+pub(crate) fn notification_scrollbar_rect(app: &AppState, area: Rect) -> Option<Rect> {
+    let metrics = notification_scroll_metrics(app, area);
+    let body = notification_body_rect(area, true);
+    (should_show_scrollbar(metrics) && body.width > 0 && body.height > 0).then_some(Rect::new(
+        area.x + area.width.saturating_sub(1),
+        body.y,
+        1,
+        body.height,
+    ))
+}
+
 pub(crate) fn compute_workspace_list_areas(
     app: &AppState,
     area: Rect,
 ) -> (Vec<crate::app::state::WorkspaceCardArea>, Vec<()>) {
-    let ws_area = workspace_list_rect(area, app.sidebar_section_split);
+    let ws_area = workspace_list_rect(sidebar_body_rect(area, app), app.sidebar_section_split);
     if ws_area == Rect::default() {
         return (Vec::new(), Vec::new());
     }
@@ -993,10 +1109,12 @@ pub(super) fn render_sidebar(
         buf[(sep_x, y)].set_style(sep_style);
     }
 
-    let (ws_area, detail_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+    let body = sidebar_body_rect(area, app);
+    let (ws_area, detail_area) = expanded_sidebar_sections(body, app.sidebar_section_split);
 
     render_workspace_list(app, terminal_runtimes, frame, ws_area, is_navigating);
     render_agent_detail(app, terminal_runtimes, frame, detail_area);
+    render_notification_list(app, frame, sidebar_notifications_rect(area, app));
     render_sidebar_toggle(app, frame, area, false, p);
 }
 
@@ -1539,6 +1657,159 @@ fn render_agent_detail(
     }
 }
 
+/// The color a recorded notification answers to.
+///
+/// A request for attention and a finished run are the same two facts the agent
+/// panel already colors, so they keep those colors here rather than inventing a
+/// second vocabulary. An agent speaking for itself is neither, and stays neutral.
+fn notification_color(
+    source: crate::app::state::NotificationSource,
+    p: &Palette,
+) -> ratatui::style::Color {
+    use crate::app::state::{NotificationSource, ToastKind};
+
+    match source {
+        NotificationSource::AgentState(ToastKind::NeedsAttention) => {
+            state_label_color(AgentState::Blocked, false, p)
+        }
+        NotificationSource::AgentState(ToastKind::Finished) => {
+            state_label_color(AgentState::Idle, false, p)
+        }
+        NotificationSource::AgentState(ToastKind::UpdateInstalled) | NotificationSource::Api => {
+            p.subtext0
+        }
+    }
+}
+
+fn render_notification_list(app: &AppState, frame: &mut Frame, area: Rect) {
+    let p = &app.palette;
+
+    if area == Rect::default() || area.height < crate::config::MIN_NOTIFICATIONS_HEIGHT {
+        return;
+    }
+
+    let sep_line = "─".repeat(area.width as usize);
+    frame.render_widget(
+        Paragraph::new(Span::styled(&sep_line, Style::default().fg(p.surface_dim))),
+        Rect::new(area.x, area.y, area.width, 1),
+    );
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![Span::styled(
+            " notifications",
+            Style::default().fg(p.overlay0).add_modifier(Modifier::BOLD),
+        )])),
+        Rect::new(area.x, area.y + 1, area.width, 1),
+    );
+
+    // The section only exists when it has something in it, so the count always
+    // has a number to print.
+    let total = app.notification_history.len();
+    let count = total.to_string();
+    let count_rect = agent_panel_header_label_rect(area, &count);
+    if count_rect != Rect::default() {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                count,
+                Style::default().fg(p.overlay0).add_modifier(Modifier::DIM),
+            ))
+            .alignment(Alignment::Right),
+            count_rect,
+        );
+    }
+
+    let metrics = notification_scroll_metrics(app, area);
+    let scrollbar_rect = notification_scrollbar_rect(app, area);
+    let body = notification_body_rect(area, should_show_scrollbar(metrics));
+    if body == Rect::default() || body.width == 0 || body.height == 0 {
+        return;
+    }
+
+    let entry_rows = notification_entry_rows(body.height);
+    let scroll = app.notification_scroll.min(metrics.max_offset_from_bottom);
+    let mut row_y = body.y;
+    let body_bottom = body.y + body.height;
+    let time_style = Style::default().fg(p.overlay0).add_modifier(Modifier::DIM);
+    let detail_style = Style::default().fg(p.overlay0).add_modifier(Modifier::DIM);
+
+    for record in app.notification_history.iter().skip(scroll) {
+        if row_y.saturating_add(entry_rows) > body_bottom {
+            break;
+        }
+
+        let agent = record.agent_label.as_deref().unwrap_or("herdr");
+        let head_width = body.width.saturating_sub(1) as usize;
+        let time_width = display_width(&record.time_label).saturating_add(1);
+        let mut head = vec![
+            Span::raw(" "),
+            Span::styled(record.time_label.clone(), time_style),
+            Span::raw(" "),
+            Span::styled(
+                truncate_end(agent, head_width.saturating_sub(time_width)),
+                Style::default()
+                    .fg(notification_color(record.source, p))
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ];
+
+        // One row per entry leaves nowhere for the detail line, so the title
+        // joins the head rather than disappearing.
+        if entry_rows == 1 {
+            let used =
+                time_width + display_width(agent).min(head_width.saturating_sub(time_width)) + 1;
+            let detail = notification_detail(record);
+            if !detail.is_empty() && head_width > used + 1 {
+                head.push(Span::raw(" "));
+                head.push(Span::styled(
+                    truncate_end(detail, head_width.saturating_sub(used + 1)),
+                    detail_style,
+                ));
+            }
+        }
+
+        frame.render_widget(
+            Paragraph::new(Line::from(head)),
+            Rect::new(body.x, row_y, body.width, 1),
+        );
+
+        if entry_rows > 1 {
+            let detail = notification_detail(record);
+            if !detail.is_empty() {
+                frame.render_widget(
+                    Paragraph::new(Line::from(vec![
+                        Span::raw("   "),
+                        Span::styled(
+                            truncate_end(detail, body.width.saturating_sub(3) as usize),
+                            detail_style,
+                        ),
+                    ])),
+                    Rect::new(body.x, row_y + 1, body.width, 1),
+                );
+            }
+        }
+
+        row_y = row_y.saturating_add(entry_rows).min(body_bottom);
+    }
+
+    if let Some(track) = scrollbar_rect {
+        render_scrollbar(frame, metrics, track, p.surface_dim, p.overlay0, "▕");
+    }
+}
+
+/// What the entry says under its heading.
+///
+/// A state-change title repeats the agent name the row above already prints, so
+/// only the event survives. An API notification's title is the whole point of it
+/// and is shown as sent.
+fn notification_detail(record: &crate::app::state::NotificationRecord) -> &str {
+    use crate::app::state::NotificationSource;
+
+    match record.source {
+        NotificationSource::AgentState(kind) => crate::app::state::toast_event_text(kind),
+        NotificationSource::Api => record.title.as_str(),
+    }
+}
+
 pub(crate) fn collapsed_sidebar_toggle_rect(area: Rect) -> Rect {
     let bottom_y = area.y + area.height.saturating_sub(1);
     let content_w = area.width.saturating_sub(1);
@@ -1662,7 +1933,8 @@ mod tests {
             .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
             .unwrap();
         let buffer = terminal.backend().buffer();
-        let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+        let (_, agent_area) =
+            expanded_sidebar_sections(sidebar_body_rect(area, &app), app.sidebar_section_split);
         let body = agent_panel_body_rect(agent_area, false);
 
         let first = row_text(buffer, body.y, 25);
@@ -1713,7 +1985,8 @@ rows = [[{ token = "workspace", bold = false }, { token = "agent", dim = false }
         terminal
             .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
             .unwrap();
-        let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+        let (_, agent_area) =
+            expanded_sidebar_sections(sidebar_body_rect(area, &app), app.sidebar_section_split);
         let body = agent_panel_body_rect(agent_area, false);
         let buffer = terminal.backend().buffer();
         let workspace = buffer[(find_symbol_x(buffer, body.y, body.width, "o"), body.y)].style();
@@ -1914,7 +2187,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
             .unwrap();
         let buffer = terminal.backend().buffer();
-        let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+        let (_, agent_area) =
+            expanded_sidebar_sections(sidebar_body_rect(area, &app), app.sidebar_section_split);
         let body = agent_panel_body_rect(agent_area, false);
         let first = row_text(buffer, body.y, 17);
 
@@ -1944,7 +2218,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         renderer
             .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
             .unwrap();
-        let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+        let (_, agent_area) =
+            expanded_sidebar_sections(sidebar_body_rect(area, &app), app.sidebar_section_split);
         let body = agent_panel_body_rect(agent_area, false);
         let rendered = row_text(renderer.backend().buffer(), body.y, 9);
 
@@ -2020,7 +2295,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
         app.sidebar_spaces.rows = vec![vec![crate::config::SpaceSidebarToken::Workspace]; 6];
         let area = Rect::new(0, 0, 20, 10);
-        let workspace_area = workspace_list_rect(area, app.sidebar_section_split);
+        let workspace_area =
+            workspace_list_rect(sidebar_body_rect(area, &app), app.sidebar_section_split);
         let body = workspace_list_body_rect(workspace_area, false);
 
         let metrics = workspace_list_scroll_metrics(&app, workspace_area);
@@ -2633,7 +2909,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         app.sidebar_spaces.row_gap = 0;
         let area = Rect::new(0, 0, 30, 20);
         app.view.workspace_card_areas = compute_workspace_card_areas(&app, area);
-        let list_area = workspace_list_rect(area, app.sidebar_section_split);
+        let list_area =
+            workspace_list_rect(sidebar_body_rect(area, &app), app.sidebar_section_split);
 
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         terminal
@@ -2674,7 +2951,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         let area = Rect::new(0, 0, 30, 10);
         app.view.workspace_card_areas = compute_workspace_card_areas(&app, area);
         assert_eq!(app.view.workspace_card_areas.len(), 2);
-        let list_area = workspace_list_rect(area, app.sidebar_section_split);
+        let list_area =
+            workspace_list_rect(sidebar_body_rect(area, &app), app.sidebar_section_split);
 
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         terminal
@@ -2766,7 +3044,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         app.sidebar_spaces.row_gap = 0;
         let area = Rect::new(0, 0, 30, 20);
         app.view.workspace_card_areas = compute_workspace_card_areas(&app, area);
-        let list_area = workspace_list_rect(area, app.sidebar_section_split);
+        let list_area =
+            workspace_list_rect(sidebar_body_rect(area, &app), app.sidebar_section_split);
         let indicator_row = workspace_drop_indicator_row(
             &app,
             &app.view.workspace_card_areas,
@@ -3075,5 +3354,111 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 },
             ]
         );
+    }
+
+    fn app_with_notifications(count: usize) -> crate::app::state::AppState {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("one")];
+        for index in 0..count {
+            app.record_notification(
+                crate::app::state::NotificationSource::AgentState(
+                    crate::app::state::ToastKind::NeedsAttention,
+                ),
+                Some("claude".into()),
+                None,
+                Some("w1".into()),
+                None,
+                format!("call {index}"),
+                String::new(),
+            );
+        }
+        app
+    }
+
+    // Turning the section on must cost a session that nothing has called for
+    // exactly nothing: no rows, no divider, no shifted sections above.
+    #[test]
+    fn an_empty_history_takes_no_rows_at_all() {
+        let app = app_with_notifications(0);
+        let area = Rect::new(0, 0, 26, 30);
+
+        assert_eq!(sidebar_body_rect(area, &app), area);
+        assert_eq!(sidebar_notifications_rect(area, &app), Rect::default());
+    }
+
+    #[test]
+    fn the_section_grows_with_entries_and_stops_at_the_configured_maximum() {
+        let area = Rect::new(0, 0, 26, 40);
+
+        // Header plus one entry.
+        let one = app_with_notifications(1);
+        assert_eq!(sidebar_notifications_rect(area, &one).height, 4);
+
+        // Header plus two entries.
+        let two = app_with_notifications(2);
+        assert_eq!(sidebar_notifications_rect(area, &two).height, 6);
+
+        // Past the configured maximum the section stops growing.
+        let many = app_with_notifications(20);
+        let height = sidebar_notifications_rect(area, &many).height;
+        assert_eq!(height, many.sidebar_notifications.reserved_height());
+        assert_eq!(
+            sidebar_body_rect(area, &many).height,
+            area.height - height,
+            "the sections above keep the rest"
+        );
+    }
+
+    #[test]
+    fn the_section_yields_when_the_sidebar_is_short() {
+        let mut app = app_with_notifications(4);
+        app.sidebar_notifications.height = 20;
+
+        // Six rows are reserved for the two sections above, and what is left
+        // must still hold a divider, a header and an entry.
+        assert_eq!(
+            sidebar_notifications_rect(Rect::new(0, 0, 26, 6), &app).height,
+            0
+        );
+        assert_eq!(
+            sidebar_notifications_rect(Rect::new(0, 0, 26, 8), &app).height,
+            0
+        );
+        assert_eq!(
+            sidebar_notifications_rect(Rect::new(0, 0, 26, 9), &app).height,
+            3
+        );
+    }
+
+    #[test]
+    fn disabling_the_section_restores_the_two_section_layout() {
+        let mut app = app_with_notifications(4);
+        app.sidebar_notifications.enabled = false;
+        let area = Rect::new(0, 0, 26, 30);
+
+        assert_eq!(sidebar_body_rect(area, &app), area);
+        assert_eq!(sidebar_notifications_rect(area, &app), Rect::default());
+    }
+
+    #[test]
+    fn notification_rows_name_the_agent_the_time_and_the_event() {
+        let app = app_with_notifications(1);
+        let area = Rect::new(0, 0, 26, 30);
+        let mut terminal = Terminal::new(TestBackend::new(26, 30)).unwrap();
+        terminal
+            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let section = sidebar_notifications_rect(area, &app);
+        let header = row_text(buffer, section.y + 1, 25);
+        let body = notification_body_rect(section, false);
+        let head = row_text(buffer, body.y, 25);
+        let detail = row_text(buffer, body.y + 1, 25);
+
+        assert!(header.contains("notifications"), "{header}");
+        assert!(header.trim_end().ends_with('1'), "count: {header}");
+        assert!(head.contains("claude"), "{head}");
+        assert!(detail.contains("needs attention"), "{detail}");
     }
 }

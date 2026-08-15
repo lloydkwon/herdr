@@ -852,6 +852,24 @@
           "description": "Expanded Space sidebar layout. Entries may be token strings or inline { token, fg, bold, dim } style tables. Supports built-in and $name metadata tokens; at most 16 rows and 16 tokens per row."
         },
         {
+          "key": "ui.sidebar.notifications.enabled",
+          "type": "boolean",
+          "default": "true",
+          "description": "Show the notification history under the agent panel. Notifications are still recorded when false, and herdr notification list still reports them."
+        },
+        {
+          "key": "ui.sidebar.notifications.height",
+          "type": "integer",
+          "default": "8",
+          "description": "Most terminal rows the notification section may take from the bottom of the sidebar, at two rows per entry. The section takes only the rows it has entries for, and none at all while the history is empty. Values below 3 hide it."
+        },
+        {
+          "key": "ui.sidebar.notifications.limit",
+          "type": "integer",
+          "default": "200",
+          "description": "Notifications kept in memory, newest first. Clamped to 2000 and not saved across server restarts."
+        },
+        {
           "key": "ui.accent",
           "type": "color",
           "default": "\"cyan\"",

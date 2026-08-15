@@ -30,8 +30,8 @@ pub use self::{
     },
     pane_border::{PaneBorderConfig, PaneBorderToken},
     sidebar::{
-        AgentSidebarToken, AgentsSidebarConfig, SidebarConfig, SidebarTokenStyle,
-        SpaceSidebarToken, SpacesSidebarConfig,
+        AgentSidebarToken, AgentsSidebarConfig, NotificationsSidebarConfig, SidebarConfig,
+        SidebarTokenStyle, SpaceSidebarToken, SpacesSidebarConfig, MIN_NOTIFICATIONS_HEIGHT,
     },
     sound::SoundConfig,
     tab_bar::TabBarRightEntryConfig,

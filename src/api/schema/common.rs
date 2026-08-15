@@ -88,6 +88,10 @@ pub struct NotificationShowParams {
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
+    /// Pane the notification speaks for, so the history can name the agent that
+    /// raised it. Optional: a caller outside any pane is recorded as Herdr's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<crate::config::ToastHerdrPosition>,
     #[serde(default, skip_serializing_if = "NotificationShowSound::is_none")]
@@ -117,6 +121,39 @@ impl NotificationShowSound {
             Self::Request => Some(crate::sound::Sound::Request),
         }
     }
+}
+
+/// One entry of the server's notification history.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NotificationInfo {
+    /// Monotonic within a server run; newer notifications have larger values.
+    pub seq: u64,
+    /// Local wall-clock time the notification fired, as `HH:MM`.
+    pub time: String,
+    pub source: NotificationInfoSource,
+    /// Agent that raised it, absent when nothing in a pane claimed it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<String>,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub context: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationInfoSource {
+    /// Herdr noticed the agent asking for attention.
+    NeedsAttention,
+    /// Herdr noticed the agent finish.
+    Finished,
+    /// Herdr spoke about itself, such as an installed update.
+    Herdr,
+    /// Something called `notification.show`.
+    Api,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

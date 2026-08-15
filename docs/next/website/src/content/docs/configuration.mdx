@@ -459,6 +459,25 @@ Metadata reporters provide values only; styling stays in the local sidebar confi
 
 Sidebar row settings affect only the expanded desktop sidebar. Collapsed and mobile views keep their compact layouts.
 
+### Notification history
+
+A toast is gone as soon as the next one lands. The notification section under the agent panel keeps what already fired, newest first, so you can see what called for you while you were away:
+
+```toml
+[ui.sidebar.notifications]
+enabled = true
+height = 8
+limit = 200
+```
+
+Each entry takes two rows: the local time and the agent that raised it, then what it said. Herdr records the state changes it notices — an agent asking for attention or finishing — and anything sent through `herdr notification show`. A notification suppressed because you were already looking at that pane is not recorded, because nothing was announced.
+
+The section grows only to what it has to show. `height` is the most rows it may take from the bottom of the sidebar, and an empty history takes none at all, so turning this on costs a quiet session nothing. Values below 3 hide the section, as does `enabled = false`. Both keep recording: `herdr notification list` reports the history either way, and `herdr notification clear` empties it.
+
+Click an entry to jump to the pane it came from. Entries whose pane has since closed stay in the list and simply do not jump.
+
+`limit` is how many notifications are kept in memory. The history is not saved across server restarts.
+
 ## Notifications
 
 Herdr can notify you when a background agent finishes or needs input:
