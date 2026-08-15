@@ -31,6 +31,123 @@ fn pane_border_title(label: &str, pane_width: u16, _focused: bool) -> Option<Str
     Some(format!(" {} ", truncate_end(label, max_label_width)))
 }
 
+/// Workspace-level facts a border title can name.
+///
+/// Every pane on screen belongs to one tab of one workspace, so these are the
+/// same for all of them and are resolved once per render rather than per pane.
+struct BorderTitleContext {
+    workspace: Option<String>,
+    tab: Option<String>,
+    branch: Option<String>,
+    indicator_style: crate::config::StatusIndicatorStyle,
+    /// `ui.show_agent_labels_on_pane_borders`. The older switch for the same
+    /// surface, so it still decides whether a detected agent may be named —
+    /// it just governs the `agent` token now instead of the whole title.
+    show_agent_labels: bool,
+}
+
+/// Builds a border title from the configured tokens.
+///
+/// Returns `None` when nothing resolved, so the caller leaves the border an
+/// unbroken line instead of drawing a lone separator.
+///
+/// Every value here is a field or a cached lookup. Nothing in this path may
+/// reach a `TerminalRuntime`: its `cwd()` reads `/proc` per call, and this runs
+/// per render × per pane × per attached client.
+fn pane_border_title_from_tokens(
+    tokens: &[crate::config::PaneBorderToken],
+    terminal: &crate::terminal::TerminalState,
+    seen: bool,
+    pane_number: Option<usize>,
+    context: &BorderTitleContext,
+) -> Option<String> {
+    use crate::config::PaneBorderToken as Token;
+
+    // values() builds a fresh map, so it is built once per pane and only when a
+    // custom token is actually configured — never once per token.
+    let metadata = tokens
+        .iter()
+        .any(|token| matches!(token, Token::Custom(_)))
+        .then(|| terminal.metadata_tokens.values());
+
+    let mut parts: Vec<String> = Vec::new();
+    for token in tokens {
+        let value = match token {
+            Token::Cwd => shorten_home(&terminal.cwd),
+            Token::Agent => context
+                .show_agent_labels
+                .then(|| {
+                    terminal
+                        .effective_display_agent()
+                        .or_else(|| terminal.effective_agent_label().map(str::to_string))
+                })
+                .flatten(),
+            Token::StateIcon => Some(
+                super::status::state_icon_symbol(terminal.state, seen, context.indicator_style)
+                    .to_string(),
+            ),
+            Token::StateText => Some(super::status::state_label(terminal.state, seen).to_string()),
+            Token::Branch => context.branch.clone(),
+            Token::Pane => pane_number.map(|number| number.to_string()),
+            Token::Workspace => context.workspace.clone(),
+            Token::Tab => context.tab.clone(),
+            Token::TerminalTitle => terminal.terminal_title.clone(),
+            Token::TerminalTitleStripped => terminal.terminal_title_stripped(),
+            Token::Custom(name) => metadata
+                .as_ref()
+                .and_then(|values| values.get(name).cloned()),
+        };
+        if let Some(value) = value {
+            let value = value.trim();
+            if !value.is_empty() {
+                parts.push(value.to_string());
+            }
+        }
+    }
+
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
+
+/// The home directory a border title abbreviates against.
+///
+/// Resolved once rather than per call: `shorten_home` runs per render × per
+/// pane × per attached client, and reading the environment there would allocate
+/// on every one of them.
+fn home_dir() -> Option<&'static std::path::Path> {
+    static HOME: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    HOME.get_or_init(|| {
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        #[cfg(windows)]
+        let home = home.or_else(|| std::env::var_os("USERPROFILE").map(std::path::PathBuf::from));
+        home.filter(|home| !home.as_os_str().is_empty())
+    })
+    .as_deref()
+}
+
+/// Abbreviates a pane's directory against the home directory, so the part that
+/// differs between panes gets the width instead of a prefix they all share.
+///
+/// Compares by path component, not by string prefix, so `/home/ann2` is not
+/// read as living under `/home/ann` and the separator is whatever the platform
+/// uses.
+fn shorten_home(path: &std::path::Path) -> Option<String> {
+    if path.as_os_str().is_empty() {
+        return None;
+    }
+    let shortened = home_dir()
+        .and_then(|home| path.strip_prefix(home).ok())
+        .map(|rest| {
+            if rest.as_os_str().is_empty() {
+                // Joining an empty path would leave a trailing separator.
+                "~".to_string()
+            } else {
+                // Joined rather than formatted so the separator is the platform's.
+                std::path::Path::new("~").join(rest).display().to_string()
+            }
+        });
+    Some(shortened.unwrap_or_else(|| path.to_string_lossy().into_owned()))
+}
+
 // Full view computation reaches this helper for active and background panes.
 // Keep terminal queries narrow, allocation-free, and short under the core lock.
 fn terminal_inner_rect(rt: &TerminalRuntime, pane_inner: Rect, pane_scrollbars: bool) -> Rect {
@@ -89,11 +206,50 @@ fn shrink_for_one_cell_gap(size: u16) -> u16 {
     }
 }
 
+/// Borders for a pane that is the only one in its tab.
+///
+/// A top rule, not a box: it exists to carry the title, and the sides and
+/// bottom would cost columns and a second row for nothing. `pane_inner_rect`
+/// turns this into exactly one row off the top and no change in width.
+///
+/// `single_pane_border` comes from `AppState::single_pane_border_enabled()`;
+/// every caller must pass that same value.
+fn single_pane_borders(single_pane_border: bool) -> Borders {
+    if single_pane_border {
+        Borders::TOP
+    } else {
+        Borders::NONE
+    }
+}
+
+/// Borders for the one pane a zoomed tab shows.
+///
+/// Zoom bypasses `apply_pane_chrome` entirely, so it has to reach the same
+/// answer on its own — and a tab holding a single pane must agree with the
+/// unzoomed path, or selecting the tab resizes its PTY.
+fn zoomed_pane_borders(
+    multi_pane: bool,
+    pane_borders: bool,
+    pane_outer_borders: bool,
+    single_pane_border: bool,
+) -> Borders {
+    if !pane_borders {
+        Borders::NONE
+    } else if !multi_pane {
+        single_pane_borders(single_pane_border)
+    } else if pane_outer_borders {
+        Borders::ALL
+    } else {
+        Borders::NONE
+    }
+}
+
 pub(crate) fn apply_pane_chrome(
     panes: Vec<PaneInfo>,
     pane_borders: bool,
     pane_gaps: bool,
     pane_outer_borders: bool,
+    single_pane_border: bool,
 ) -> Vec<PaneInfo> {
     let multi_pane = panes.len() > 1;
     let outer_left = panes.iter().map(|info| info.rect.x).min().unwrap_or(0);
@@ -124,8 +280,10 @@ pub(crate) fn apply_pane_chrome(
                 }
             }
 
-            info.borders = if !multi_pane || !pane_borders {
+            info.borders = if !pane_borders {
                 Borders::NONE
+            } else if !multi_pane {
+                single_pane_borders(single_pane_border)
             } else {
                 let mut borders = Borders::ALL;
                 if !pane_gaps {
@@ -208,11 +366,12 @@ pub(super) fn resize_tab_panes(
     if tab.zoomed {
         let focused_id = tab.layout.focused();
         if let Some((terminal_id, rt)) = runtime_for_tab_pane(terminal_runtimes, tab, focused_id) {
-            let borders = if multi_pane && app.pane_borders && app.pane_outer_borders {
-                Borders::ALL
-            } else {
-                Borders::NONE
-            };
+            let borders = zoomed_pane_borders(
+                multi_pane,
+                app.pane_borders,
+                app.pane_outer_borders,
+                app.single_pane_border_enabled(),
+            );
             let pane_inner = pane_inner_rect(area, borders);
             let inner_rect = terminal_inner_rect(rt, pane_inner, app.pane_scrollbars);
             if !app.direct_attach_resize_locks.contains(terminal_id) {
@@ -232,6 +391,7 @@ pub(super) fn resize_tab_panes(
         app.pane_borders,
         app.pane_gaps,
         app.pane_outer_borders,
+        app.single_pane_border_enabled(),
     ) {
         let pane_inner = pane_inner_rect(info.rect, info.borders);
 
@@ -268,11 +428,12 @@ pub(super) fn compute_pane_infos(
 
     if ws.zoomed {
         let focused_id = ws.layout.focused();
-        let borders = if multi_pane && app.pane_borders && app.pane_outer_borders {
-            Borders::ALL
-        } else {
-            Borders::NONE
-        };
+        let borders = zoomed_pane_borders(
+            multi_pane,
+            app.pane_borders,
+            app.pane_outer_borders,
+            app.single_pane_border_enabled(),
+        );
         let pane_inner = pane_inner_rect(area, borders);
         let mut inner_rect = pane_inner;
         let mut scrollbar_rect = None;
@@ -307,6 +468,7 @@ pub(super) fn compute_pane_infos(
         app.pane_borders,
         app.pane_gaps,
         app.pane_outer_borders,
+        app.single_pane_border_enabled(),
     );
 
     for info in &mut pane_infos {
@@ -656,18 +818,60 @@ fn render_pane_border_titles(
     pane_infos: &[PaneInfo],
     frame: &mut Frame,
 ) {
+    // Workspace-level tokens are the same on every pane here — the tab surface
+    // draws one tab of one workspace — so they are resolved once rather than
+    // cloned per pane inside the loop.
+    let tokens = &app.pane_border_title;
+    let context = BorderTitleContext {
+        workspace: tokens
+            .iter()
+            .any(|token| matches!(token, crate::config::PaneBorderToken::Workspace))
+            .then(|| ws.display_name_from_terminals(&app.terminals)),
+        tab: tokens
+            .iter()
+            .any(|token| matches!(token, crate::config::PaneBorderToken::Tab))
+            .then(|| ws.active_tab_display_name())
+            .flatten(),
+        branch: tokens
+            .iter()
+            .any(|token| matches!(token, crate::config::PaneBorderToken::Branch))
+            .then(|| ws.branch())
+            .flatten(),
+        indicator_style: app.status_indicators,
+        show_agent_labels: app.show_agent_labels_on_pane_borders,
+    };
+
     let buf = frame.buffer_mut();
     let area = buf.area;
     for info in pane_infos {
         if !info.borders.contains(Borders::TOP) || info.rect.width <= 4 {
             continue;
         }
-        let Some(title) = ws
-            .pane_state(info.id)
-            .and_then(|pane| app.terminals.get(&pane.attached_terminal_id))
-            .and_then(|terminal| terminal.border_label(app.show_agent_labels_on_pane_borders))
-            .and_then(|label| pane_border_title(&label, info.rect.width, info.is_focused))
-        else {
+        let Some(pane) = ws.pane_state(info.id) else {
+            continue;
+        };
+        let Some(terminal) = app.terminals.get(&pane.attached_terminal_id) else {
+            continue;
+        };
+        // An explicit name wins over anything generated: the agent's reported
+        // title first, then a name the user typed. Tokens fill the silence that
+        // used to leave the border blank.
+        //
+        // A *detected* agent is not an explicit name, so it does not short
+        // circuit the tokens — it reaches the border through the `agent` token,
+        // which `show_agent_labels_on_pane_borders` still gates.
+        let Some(label) = terminal.explicit_border_label().or_else(|| {
+            pane_border_title_from_tokens(
+                tokens,
+                terminal,
+                pane.seen,
+                ws.public_pane_number(info.id),
+                &context,
+            )
+        }) else {
+            continue;
+        };
+        let Some(title) = pane_border_title(&label, info.rect.width, info.is_focused) else {
             continue;
         };
         let y = info.rect.y;
@@ -1003,6 +1207,7 @@ pub(super) fn render_empty(app: &AppState, frame: &mut Frame, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::detect::{Agent, AgentState};
     use crate::layout::PaneId;
     use crate::selection::Selection;
     use crate::terminal::TerminalRuntime;
@@ -1082,6 +1287,388 @@ mod tests {
         assert_eq!(buffer[(6, 0)].symbol(), "块");
     }
 
+    /// Builds a workspace with one bordered pane and renders its border.
+    ///
+    /// Returns the top border row as a string so a test can read the title the
+    /// way a user sees it, rather than cell by cell.
+    fn rendered_border_top(
+        tokens: Vec<crate::config::PaneBorderToken>,
+        show_agent_labels: bool,
+        prepare: impl FnOnce(&mut TerminalState),
+    ) -> String {
+        let mut app = AppState::test_new();
+        app.mode = Mode::Terminal;
+        app.pane_border_title = tokens;
+        app.show_agent_labels_on_pane_borders = show_agent_labels;
+        app.view.terminal_area = Rect::new(0, 0, 40, 3);
+        let ws = Workspace::test_new("test");
+        let pane_id = ws.tabs[0].root_pane;
+        app.view.pane_infos = vec![PaneInfo {
+            id: pane_id,
+            rect: Rect::new(0, 0, 40, 3),
+            inner_rect: Rect::default(),
+            scrollbar_rect: None,
+            borders: Borders::ALL,
+            is_focused: false,
+        }];
+
+        let terminal_id = ws.tabs[0].panes[&pane_id].attached_terminal_id.clone();
+        let mut terminal_state = TerminalState::new(terminal_id.clone(), "/tmp/project".into());
+        prepare(&mut terminal_state);
+        app.terminals.insert(terminal_id, terminal_state);
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(40, 3)).unwrap();
+        terminal
+            .draw(|frame| render_view_pane_borders(&app, &ws, frame))
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        (0..40)
+            .map(|x| buffer[(x, 0)].symbol().to_string())
+            .collect()
+    }
+
+    // The point of the feature: a pane nobody has titled says where it is
+    // working instead of leaving the border blank.
+    #[test]
+    fn border_tokens_name_an_untitled_pane() {
+        let top = rendered_border_top(vec![crate::config::PaneBorderToken::Cwd], false, |_| {});
+        assert!(top.contains("/tmp/project"), "{top}");
+    }
+
+    /// Computes the chrome a lone pane gets, the way the live view does.
+    fn lone_pane_infos(prepare: impl FnOnce(&mut AppState)) -> Vec<PaneInfo> {
+        let mut app = AppState::test_new();
+        app.pane_border_title = vec![crate::config::PaneBorderToken::Cwd];
+        prepare(&mut app);
+
+        let mut workspace = Workspace::test_new("test");
+        let root_pane = workspace.tabs[0].root_pane;
+        workspace.tabs[0].runtimes.insert(
+            root_pane,
+            TerminalRuntime::test_with_scrollback_bytes(40, 8, 1024, b"ready\n"),
+        );
+        app.workspaces = vec![workspace];
+        app.active = Some(0);
+
+        compute_pane_infos(
+            &app,
+            &TerminalRuntimeRegistry::new(),
+            Rect::new(10, 3, 40, 8),
+            false,
+            crate::kitty_graphics::HostCellSize::default(),
+        )
+    }
+
+    // An unsplit pane is where a session spends most of its time, so it says
+    // where it is working too — as a rule under the tab row, not a box.
+    #[tokio::test]
+    async fn a_lone_pane_border_is_a_top_rule_that_costs_one_row_and_no_columns() {
+        let info = lone_pane_infos(|_| {}).remove(0);
+
+        assert_eq!(info.borders, Borders::TOP, "a box would cost columns too");
+        // Same x and width as the pane; one row off the top; the scrollbar
+        // gutter still takes its column.
+        assert_eq!(info.rect, Rect::new(10, 3, 40, 8));
+        assert_eq!(info.inner_rect, Rect::new(10, 4, 39, 7));
+    }
+
+    // The documented way to turn titles off must not leave a blank rule behind
+    // that costs a row and says nothing.
+    #[tokio::test]
+    async fn an_empty_title_leaves_a_lone_pane_borderless() {
+        let info = lone_pane_infos(|app| app.pane_border_title.clear()).remove(0);
+
+        assert_eq!(info.borders, Borders::NONE);
+        assert_eq!(info.inner_rect, Rect::new(10, 3, 39, 8));
+    }
+
+    // A lone pane's top edge *is* the outer frame, so the switch that removes
+    // the outer frame removes this too. Same for pane borders entirely.
+    #[tokio::test]
+    async fn a_lone_pane_border_obeys_the_existing_border_switches() {
+        for prepare in [
+            |app: &mut AppState| app.pane_outer_borders = false,
+            |app: &mut AppState| app.pane_borders = false,
+            |app: &mut AppState| app.pane_border_show_when_single_pane = false,
+        ] {
+            let info = lone_pane_infos(prepare).remove(0);
+            assert_eq!(info.borders, Borders::NONE);
+        }
+    }
+
+    // The point of the feature, drawn: the rule under the tab row reads as an
+    // unbroken line with the title inside it, no dangling corners at the ends.
+    #[test]
+    fn a_lone_pane_draws_its_title_on_an_unbroken_rule() {
+        let mut app = AppState::test_new();
+        app.mode = Mode::Terminal;
+        app.pane_border_title = vec![crate::config::PaneBorderToken::Cwd];
+
+        let ws = Workspace::test_new("test");
+        let pane_id = ws.tabs[0].root_pane;
+        let area = Rect::new(0, 0, 40, 3);
+        app.view.terminal_area = area;
+        app.view.pane_infos =
+            apply_pane_chrome(ws.tabs[0].layout.panes(area), true, false, true, true);
+
+        let terminal_id = ws.tabs[0].panes[&pane_id].attached_terminal_id.clone();
+        app.terminals.insert(
+            terminal_id.clone(),
+            TerminalState::new(terminal_id, "/tmp/project".into()),
+        );
+
+        let mut backend =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(40, 3)).unwrap();
+        backend
+            .draw(|frame| render_view_pane_borders(&app, &ws, frame))
+            .unwrap();
+        let buffer = backend.backend().buffer();
+        let top: String = (0..40)
+            .map(|x| buffer[(x, 0)].symbol().to_string())
+            .collect();
+
+        assert!(top.contains("/tmp/project"), "{top}");
+        assert!(
+            !top.contains('┌'),
+            "a lone rule must not grow corners: {top}"
+        );
+        assert!(
+            !top.contains('┐'),
+            "a lone rule must not grow corners: {top}"
+        );
+        // The row below stays terminal content — no side borders were drawn.
+        let second: String = (0..40)
+            .map(|x| buffer[(x, 1)].symbol().to_string())
+            .collect();
+        assert!(
+            !second.contains('│'),
+            "a box was drawn, not a rule: {second}"
+        );
+    }
+
+    // The real hazard of this feature: three places decide pane borders, and a
+    // lone pane must get the same answer from all of them. If the selected and
+    // background paths disagree by a row, every tab switch reflows the PTY.
+    #[tokio::test]
+    async fn selected_and_background_paths_agree_on_a_lone_pane() {
+        for zoomed in [false, true] {
+            let mut app = AppState::test_new();
+            app.pane_border_title = vec![crate::config::PaneBorderToken::Cwd];
+
+            let mut workspace = Workspace::test_new("test");
+            workspace.tabs[0].zoomed = zoomed;
+            let root_pane = workspace.tabs[0].root_pane;
+            workspace.tabs[0].runtimes.insert(
+                root_pane,
+                TerminalRuntime::test_with_scrollback_bytes(40, 8, 1024, b"ready\n"),
+            );
+            app.workspaces = vec![workspace];
+            app.active = Some(0);
+
+            let area = Rect::new(10, 3, 40, 8);
+            let registry = TerminalRuntimeRegistry::new();
+            let cell_size = crate::kitty_graphics::HostCellSize::default();
+
+            let selected =
+                compute_pane_infos(&app, &registry, area, false, cell_size)[0].inner_rect;
+            resize_tab_panes(&app, &registry, &app.workspaces[0].tabs[0], area, cell_size);
+            let background = app.workspaces[0].tabs[0].runtimes[&root_pane].current_size();
+
+            assert_eq!(
+                (selected.height, selected.width),
+                background,
+                "selected and background disagree (zoomed={zoomed})"
+            );
+        }
+    }
+
+    // The reported case: side-by-side panes, an agent detected in the right
+    // one, and the default title. Both borders must name their own directory —
+    // the right pane keeps its own TOP border across the shared divider, and a
+    // detected agent adds to its title rather than replacing it.
+    #[test]
+    fn a_split_names_both_panes_including_the_one_running_an_agent() {
+        let mut app = AppState::test_new();
+        app.mode = Mode::Terminal;
+        app.show_agent_labels_on_pane_borders = true;
+        app.pane_border_title = vec![
+            crate::config::PaneBorderToken::Cwd,
+            crate::config::PaneBorderToken::Agent,
+        ];
+
+        let mut ws = Workspace::test_new("test");
+        let left_id = ws.tabs[0].root_pane;
+        let right_id = ws.test_split(ratatui::layout::Direction::Horizontal);
+        ws.tabs[0].layout.focus_pane(left_id);
+
+        let area = Rect::new(0, 0, 80, 6);
+        app.view.terminal_area = area;
+        app.view.pane_infos =
+            apply_pane_chrome(ws.tabs[0].layout.panes(area), true, false, true, false);
+
+        for (pane_id, cwd, agent) in [
+            (left_id, "/tmp/left", None),
+            (right_id, "/tmp/right", Some(Agent::Claude)),
+        ] {
+            let terminal_id = ws.tabs[0].panes[&pane_id].attached_terminal_id.clone();
+            let mut terminal = TerminalState::new(terminal_id.clone(), cwd.into());
+            if let Some(agent) = agent {
+                terminal.set_detected_state(Some(agent), AgentState::Idle);
+            }
+            app.terminals.insert(terminal_id, terminal);
+        }
+
+        let mut backend =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(area.width, area.height))
+                .unwrap();
+        backend
+            .draw(|frame| render_view_pane_borders(&app, &ws, frame))
+            .unwrap();
+        let buffer = backend.backend().buffer();
+
+        let read_top = |info: &PaneInfo| -> String {
+            (info.rect.x..info.rect.x + info.rect.width)
+                .map(|x| buffer[(x, info.rect.y)].symbol().to_string())
+                .collect()
+        };
+        let left = read_top(
+            app.view
+                .pane_infos
+                .iter()
+                .find(|info| info.id == left_id)
+                .unwrap(),
+        );
+        let right = read_top(
+            app.view
+                .pane_infos
+                .iter()
+                .find(|info| info.id == right_id)
+                .unwrap(),
+        );
+
+        assert!(left.contains("/tmp/left"), "left border: {left}");
+        assert!(!left.contains("claude"), "left border: {left}");
+        assert!(right.contains("/tmp/right"), "right border: {right}");
+        assert!(right.contains("claude"), "right border: {right}");
+    }
+
+    // Two panes on one screen differ by where they are, which is the whole
+    // reason the default names cwd rather than the workspace.
+    #[test]
+    fn border_tokens_join_with_spaces_and_skip_what_is_absent() {
+        let top = rendered_border_top(
+            vec![
+                crate::config::PaneBorderToken::Cwd,
+                crate::config::PaneBorderToken::Agent,
+            ],
+            true,
+            |_| {},
+        );
+        // No agent is running, so only the cwd shows — and no stray separator.
+        assert!(top.contains("/tmp/project"), "{top}");
+        assert!(!top.contains("  ─"), "a missing token left a gap: {top}");
+    }
+
+    // An explicit name outranks anything generated. Overwriting a name the user
+    // typed with an automatic string would be a regression.
+    #[test]
+    fn a_manual_label_still_wins_over_tokens() {
+        let top = rendered_border_top(
+            vec![crate::config::PaneBorderToken::Cwd],
+            false,
+            |terminal| {
+                terminal.set_manual_label("build".into());
+            },
+        );
+        assert!(top.contains("build"), "{top}");
+        assert!(!top.contains("/tmp/project"), "{top}");
+    }
+
+    // The documented way to turn the title off leaves the border as it was.
+    #[test]
+    fn no_tokens_leaves_the_border_unbroken() {
+        let top = rendered_border_top(Vec::new(), false, |_| {});
+        assert!(
+            top.trim_matches(|ch| ch == '─' || ch == '┌' || ch == '┐')
+                .is_empty(),
+            "border should be an unbroken line: {top}"
+        );
+    }
+
+    // The border is narrow, so the prefix every pane shares is the first thing
+    // worth spending. Compared by component, so a sibling of home that merely
+    // starts with the same text is left alone.
+    #[test]
+    fn shorten_home_abbreviates_only_real_children_of_home() {
+        let Some(home) = home_dir() else {
+            return;
+        };
+
+        assert_eq!(shorten_home(home).as_deref(), Some("~"));
+        assert_eq!(
+            shorten_home(&home.join("dev").join("herdr")),
+            Some(
+                std::path::Path::new("~")
+                    .join("dev")
+                    .join("herdr")
+                    .display()
+                    .to_string()
+            )
+        );
+
+        let sibling = std::path::PathBuf::from(format!("{}2", home.display()));
+        assert_eq!(
+            shorten_home(&sibling).as_deref(),
+            Some(sibling.to_string_lossy().as_ref()),
+            "a sibling sharing home's text prefix must not be abbreviated"
+        );
+
+        assert_eq!(shorten_home(std::path::Path::new("")), None);
+    }
+
+    // A detected agent is a guess about what is running, not a name anyone
+    // chose. Letting it short circuit the title is what kept the cwd off the
+    // border for everyone who had the older switch turned on.
+    #[test]
+    fn a_detected_agent_does_not_displace_the_tokens() {
+        let top = rendered_border_top(
+            vec![
+                crate::config::PaneBorderToken::Cwd,
+                crate::config::PaneBorderToken::Agent,
+            ],
+            true,
+            |terminal| {
+                terminal.set_detected_state(Some(Agent::Claude), AgentState::Idle);
+            },
+        );
+        assert!(top.contains("/tmp/project"), "cwd was displaced: {top}");
+        assert!(top.contains("claude"), "{top}");
+    }
+
+    // Turning agent labels off is an existing setting, and the settings modal
+    // still offers it. It now governs the `agent` token rather than the whole
+    // title, so the rest of the title must survive it.
+    #[test]
+    fn agent_labels_off_suppresses_only_the_agent_token() {
+        let top = rendered_border_top(
+            vec![
+                crate::config::PaneBorderToken::Cwd,
+                crate::config::PaneBorderToken::Agent,
+            ],
+            false,
+            |terminal| {
+                terminal.set_detected_state(Some(Agent::Claude), AgentState::Idle);
+            },
+        );
+        assert!(top.contains("/tmp/project"), "{top}");
+        assert!(
+            !top.contains("claude"),
+            "agent token was not suppressed: {top}"
+        );
+    }
+
     #[test]
     fn default_horizontal_split_uses_one_shared_divider_column() {
         let mut workspace = Workspace::test_new("test");
@@ -1093,6 +1680,7 @@ mod tests {
             workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
             true,
             false,
+            true,
             true,
         );
         let left = infos.iter().find(|info| info.id == root).unwrap();
@@ -1115,6 +1703,7 @@ mod tests {
             true,
             false,
             true,
+            true,
         );
         let top = infos.iter().find(|info| info.id == root).unwrap();
         let bottom = infos.iter().find(|info| info.id == bottom).unwrap();
@@ -1136,6 +1725,7 @@ mod tests {
             true,
             false,
             false,
+            true,
         );
         let left = infos.iter().find(|info| info.id == root).unwrap();
         let right = infos.iter().find(|info| info.id == right).unwrap();
@@ -1153,6 +1743,7 @@ mod tests {
 
         let infos = apply_pane_chrome(
             workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
+            true,
             true,
             true,
             true,
@@ -1177,6 +1768,7 @@ mod tests {
             false,
             true,
             true,
+            true,
         );
         let left = infos.iter().find(|info| info.id == root).unwrap();
         let right = infos.iter().find(|info| info.id == right).unwrap();
@@ -1196,6 +1788,7 @@ mod tests {
             workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
             false,
             false,
+            true,
             true,
         );
 

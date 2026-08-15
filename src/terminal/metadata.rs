@@ -667,11 +667,12 @@ mod tests {
             seq: None,
         });
 
+        // A title the agent reported outranks both the name the user typed and
+        // the detected agent, so it is what the pane border says.
         assert_eq!(
-            terminal.border_label(false).as_deref(),
+            terminal.explicit_border_label().as_deref(),
             Some("Prompt title")
         );
-        assert_eq!(terminal.border_label(true).as_deref(), Some("Prompt title"));
     }
 
     #[test]

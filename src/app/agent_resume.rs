@@ -131,6 +131,7 @@ impl App {
             self.state.pane_borders,
             self.state.pane_gaps,
             self.state.pane_outer_borders,
+            self.state.single_pane_border_enabled(),
         );
 
         if self.state.active == Some(ws_idx)
@@ -292,12 +293,14 @@ fn derived_pending_agent_resume_pane_infos(
     pane_borders: bool,
     pane_gaps: bool,
     pane_outer_borders: bool,
+    single_pane_border: bool,
 ) -> Vec<crate::layout::PaneInfo> {
     crate::ui::apply_pane_chrome(
         tab.layout.panes(terminal_area),
         pane_borders,
         pane_gaps,
         pane_outer_borders,
+        single_pane_border,
     )
     .into_iter()
     .map(|mut info| {

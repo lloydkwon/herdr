@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Pane borders now carry a title built from `[ui.pane_border] title`, so a pane nobody has named says where it is working and what is running there. An unsplit pane has no border to write on, so it gets a single rule across its top, one line under the tab row; `show_when_single_pane = false` leaves it full height. Tokens cover cwd, agent, agent state, branch, pane number, workspace, tab, terminal title, and `$name` metadata; `title = []` restores blank borders. A pane an agent titled or that you named keeps that name. A detected agent now reaches the border through the `agent` token instead of taking the whole title, so `show_agent_labels_on_pane_borders` no longer hides the rest of it.
 - CLI help now points coding agents to Herdr's plain-text guide, documentation index, and built-in control skill.
 - Added Qwen Code detection for idle, working, and user-confirmation states, plus optional native session restore.
 - Herdr now keeps the outer terminal window title in sync with the session through `ui.window_title`, so window managers and terminal tab bars show the active workspace and the host the panes actually run on.

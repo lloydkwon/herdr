@@ -30,6 +30,11 @@ sidebar_start_collapsed = true
 sidebar_collapsed_mode = "hidden"
 hide_tab_bar_when_single_tab = true
 pane_scrollbars = false
+
+# Strips the last of the chrome, like the settings above it, so these tests can
+# assert the configured size exactly instead of the size minus a title row.
+[ui.pane_border]
+show_when_single_pane = false
 "#;
 
 fn unique_test_dir() -> PathBuf {

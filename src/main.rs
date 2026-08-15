@@ -332,8 +332,27 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Keep split panes visually separated instead of sharing divider borders.
 # pane_gaps = true
 
-# Show detected/reported agent labels in split pane borders when no manual pane name is set.
+# Whether a detected agent may be named on a split pane border. This is the older switch for
+# the same surface: [ui.pane_border] below decides what the border says, and this decides
+# whether its "agent" token is allowed to answer. Leaving it false drops that one token and
+# leaves the rest of the title alone.
 # show_agent_labels_on_pane_borders = false
+
+# What a pane's top border says when nothing has already titled it. A pane an agent
+# has titled, or that you named yourself, keeps that name instead.
+# Tokens: cwd, agent, state_icon, state_text, branch, pane, workspace, tab, terminal_title,
+# terminal_title_stripped, and $name for values reported through `herdr pane report-metadata`.
+# Set to [] to leave borders blank.
+# Note that every visible pane belongs to the same workspace and tab, so "workspace" and "tab"
+# print the same word on all of them.
+# [ui.pane_border]
+# title = ["cwd", "agent"]
+
+# An unsplit pane has no border to write on, so it is given a single rule across its top —
+# one line under the tab row. Set false to leave a lone pane full height; splits are
+# unaffected either way. pane_borders = false and pane_outer_borders = false also remove it,
+# and so does title = [], which would otherwise spend a line on a blank rule.
+# show_when_single_pane = true
 
 # Hide the tab row when a workspace has exactly one tab.
 # New tabs can still be created with the configured keybinding.

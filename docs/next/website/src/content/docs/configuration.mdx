@@ -279,6 +279,38 @@ Color values accept hex, named colors, `rgb(r,g,b)`, or reset aliases like `rese
 
 ## UI and sidebar
 
+Panes carry a title on their top border. A pane an agent has titled, or that you named
+yourself, keeps that name; otherwise the border says what `[ui.pane_border]` asks for:
+
+```toml
+[ui.pane_border]
+title = ["cwd", "agent"]
+show_when_single_pane = true
+```
+
+Tokens are `cwd`, `agent`, `state_icon`, `state_text`, `branch`, `pane`, `workspace`, `tab`,
+`terminal_title`, `terminal_title_stripped`, and `$name` for values reported through
+`herdr pane report-metadata`. Set `title = []` to leave borders blank.
+
+A split pane already has a border to write on. An unsplit pane does not, so it is given a
+single rule across its top — one line directly under the tab row — which is what
+`show_when_single_pane` controls. Set it to `false` to leave a lone pane at full height;
+splits keep their titles either way. `pane_borders = false` and `pane_outer_borders = false`
+also remove that rule, since a lone pane's top edge is the outer frame, and so does
+`title = []`, which would otherwise spend a line on a blank rule.
+
+Every visible pane belongs to the same workspace and tab, so `workspace` and `tab` print the
+same word on all of them; `cwd` is what actually differs.
+
+The rule costs one terminal row. That matters most in mobile layout, where a single unsplit
+pane is the norm and vertical space is scarcest — turn `show_when_single_pane` off there if
+the row is better spent on output.
+
+A detected agent is not a name, so it no longer takes the border to itself: it reaches the
+title through the `agent` token, alongside whatever else you asked for. The older
+`show_agent_labels_on_pane_borders` switch — and the Pane labels toggle in settings — now
+turns that one token off rather than the whole title.
+
 The sidebar is the main Herdr dashboard. Search `ui.` in the [Config reference](/docs/config-reference/) for sizing, collapsed mode, Agent panel ordering, mouse behavior, pane borders, and other presentation settings.
 
 Set `tab_bar_position = "bottom"` under `[ui]` to place the desktop tab row below the terminal panes. Prefix, Navigate, Copy, and Resize mode bars temporarily replace the bottom tab row while active. The default is `"top"`.

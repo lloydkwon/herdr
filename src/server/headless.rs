@@ -8957,8 +8957,12 @@ next_tab = ""
         assert!(!mobile_surface.contains("background"));
 
         let foreground_terminal_area = Rect::new(26, 1, 94, 39);
+        // One column for the scrollbar gutter, one row for the lone pane's top
+        // border, which carries its title. Both tabs hold a single pane, and
+        // the selected and background paths must agree on that row or every tab
+        // switch reflows the PTY.
         let expected_pane_size = (
-            foreground_terminal_area.height,
+            foreground_terminal_area.height.saturating_sub(1),
             foreground_terminal_area.width.saturating_sub(1),
         );
         assert_eq!(
@@ -9018,7 +9022,11 @@ next_tab = ""
         server.resize_shared_runtime_to_effective_size();
 
         let terminal_area = server.app.state.view.terminal_area;
-        let expected = (terminal_area.height, terminal_area.width.saturating_sub(1));
+        // Scrollbar column, plus the lone pane's title border row.
+        let expected = (
+            terminal_area.height.saturating_sub(1),
+            terminal_area.width.saturating_sub(1),
+        );
         assert_eq!(
             server
                 .app

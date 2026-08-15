@@ -2109,17 +2109,14 @@ impl TerminalState {
         }
     }
 
-    pub fn border_label(&self, show_agent_labels: bool) -> Option<String> {
-        self.effective_title().or_else(|| {
-            self.manual_label.clone().or_else(|| {
-                show_agent_labels
-                    .then(|| {
-                        self.effective_display_agent()
-                            .or_else(|| self.effective_agent_label().map(str::to_string))
-                    })
-                    .flatten()
-            })
-        })
+    /// A name something explicitly gave this pane: the title an agent reported,
+    /// otherwise the name the user typed.
+    ///
+    /// A detected agent label is deliberately not here. Detection is a guess
+    /// about what is running, not a name anyone chose, so it belongs in a border
+    /// title's `agent` token rather than ahead of the whole title.
+    pub fn explicit_border_label(&self) -> Option<String> {
+        self.effective_title().or_else(|| self.manual_label.clone())
     }
 
     fn recompute_effective_state(
@@ -3905,24 +3902,29 @@ mod tests {
         assert_eq!(terminal.state, AgentState::Working);
     }
 
+    // A border title falls back to its configured tokens only when nothing has
+    // explicitly named the pane. Detection is a guess about what is running
+    // rather than a name anyone chose, so it must never count as one — it
+    // reaches the border through the `agent` token instead.
     #[test]
-    fn border_label_prefers_manual_label_over_agent_label() {
+    fn explicit_border_label_takes_names_but_not_a_detected_agent() {
         let mut terminal = test_terminal();
         terminal.set_detected_state(Some(Agent::Claude), AgentState::Idle);
-
-        assert_eq!(terminal.border_label(false), None);
-        assert_eq!(terminal.border_label(true).as_deref(), Some("claude"));
+        assert_eq!(terminal.explicit_border_label(), None);
 
         terminal.set_manual_label(" reviewer ".into());
-        assert_eq!(terminal.border_label(false).as_deref(), Some("reviewer"));
-        assert_eq!(terminal.border_label(true).as_deref(), Some("reviewer"));
+        assert_eq!(
+            terminal.explicit_border_label().as_deref(),
+            Some("reviewer")
+        );
 
+        // A name that is only whitespace is not a name.
         terminal.set_manual_label("   ".into());
-        assert_eq!(terminal.border_label(true).as_deref(), Some("claude"));
+        assert_eq!(terminal.explicit_border_label(), None);
 
         terminal.set_manual_label("reviewer".into());
         terminal.clear_manual_label();
-        assert_eq!(terminal.border_label(true).as_deref(), Some("claude"));
+        assert_eq!(terminal.explicit_border_label(), None);
     }
 
     #[test]

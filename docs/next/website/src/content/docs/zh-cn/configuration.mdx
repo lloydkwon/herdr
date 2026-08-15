@@ -255,6 +255,35 @@ yellow = "#f9e2af"
 
 ## UI 与侧边栏
 
+窗格会在上边框显示标题。已被智能体命名的窗格,或你自己命名的窗格,保留原有名称;
+其余则按 `[ui.pane_border]` 的配置显示:
+
+```toml
+[ui.pane_border]
+title = ["cwd", "agent"]
+show_when_single_pane = true
+```
+
+可用记号有 `cwd`、`agent`、`state_icon`、`state_text`、`branch`、`pane`、`workspace`、`tab`、
+`terminal_title`、`terminal_title_stripped`,以及指向 `herdr pane report-metadata` 上报值的
+`$name`。设为 `title = []` 可让边框保持空白。
+
+分割窗格本来就有可写的边框。未分割的单个窗格没有,因此会在其顶部单独画一条横线 ——
+就在标签行正下方的这一行,由 `show_when_single_pane` 控制。设为 `false` 可让单个窗格
+保持满高,分割窗格的标题不受影响。单个窗格的上边缘本身就是外框,所以
+`pane_borders = false` 和 `pane_outer_borders = false` 同样会移除这条横线;
+`title = []` 也会,以免为一条空白横线浪费一行。
+
+屏幕上可见的窗格都属于同一个工作区和标签页,所以 `workspace` 和 `tab` 在每个窗格上都是
+同样的文字,真正有区别的是 `cwd`。
+
+这条横线会占用终端的一行。在移动端布局中影响最明显 —— 那里单个未分割窗格是常态,
+纵向空间也最紧张。若更希望把这一行留给输出,请关闭 `show_when_single_pane`。
+
+检测到的 agent 并不是名字,因此它不再独占边框,而是与你配置的其他记号一起,通过 `agent`
+记号出现。原有的 `show_agent_labels_on_pane_borders` 开关以及设置中的 Pane labels 选项,
+现在只关闭这一个记号,而不是整个标题。
+
 侧边栏是 Herdr 的主仪表盘。在[配置参考](/docs/config-reference/)中搜索 `ui.`，可查看尺寸、折叠模式、Agent 面板排序、鼠标行为、窗格边框和其他显示设置。
 
 ### 外层终端窗口标题

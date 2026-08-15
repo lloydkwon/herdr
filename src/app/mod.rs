@@ -650,6 +650,8 @@ impl App {
             pane_scrollbars: config.ui.pane_scrollbars,
             pane_gaps: config.ui.pane_gaps,
             show_agent_labels_on_pane_borders: config.ui.show_agent_labels_on_pane_borders,
+            pane_border_title: config.ui.pane_border.title.clone(),
+            pane_border_show_when_single_pane: config.ui.pane_border.show_when_single_pane,
             hide_tab_bar_when_single_tab: config.ui.hide_tab_bar_when_single_tab,
             tab_bar_position: config.ui.tab_bar_position,
             tab_bar_right: Vec::new(),
@@ -1493,6 +1495,9 @@ impl App {
                 self.state.pane_gaps = config.ui.pane_gaps;
                 self.state.show_agent_labels_on_pane_borders =
                     config.ui.show_agent_labels_on_pane_borders;
+                self.state.pane_border_title = config.ui.pane_border.title.clone();
+                self.state.pane_border_show_when_single_pane =
+                    config.ui.pane_border.show_when_single_pane;
                 self.state.hide_tab_bar_when_single_tab = config.ui.hide_tab_bar_when_single_tab;
                 self.state.tab_bar_position = config.ui.tab_bar_position;
                 self.configure_tab_bar_status(

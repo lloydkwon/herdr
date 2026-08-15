@@ -1487,6 +1487,10 @@ pub struct AppState {
     pub pane_scrollbars: bool,
     pub pane_gaps: bool,
     pub show_agent_labels_on_pane_borders: bool,
+    /// Fields a split pane's top border names when nothing has titled it.
+    pub pane_border_title: Vec<crate::config::PaneBorderToken>,
+    /// Whether an unsplit pane gets a top border to carry that title.
+    pub pane_border_show_when_single_pane: bool,
     pub hide_tab_bar_when_single_tab: bool,
     pub tab_bar_position: TabBarPositionConfig,
     pub tab_bar_right: Vec<TabBarStatusSegment>,
@@ -1581,6 +1585,24 @@ impl AppState {
 
     pub fn agent_border_labels_enabled(&self) -> bool {
         self.show_agent_labels_on_pane_borders
+    }
+
+    /// Whether a lone unsplit pane gets a top border, which exists only to
+    /// carry the title.
+    ///
+    /// Three places decide pane borders — `apply_pane_chrome` and the two
+    /// zoomed branches — and they must all ask this one question. A pane whose
+    /// geometry disagrees between the selected and background paths reflows its
+    /// PTY by a row on every tab switch.
+    ///
+    /// It is deliberately subordinate to `pane_borders` and
+    /// `pane_outer_borders`: a lone pane's top edge *is* the outer frame. The
+    /// empty-title check keeps `title = []` from spending a row on a blank rule.
+    pub fn single_pane_border_enabled(&self) -> bool {
+        self.pane_borders
+            && self.pane_outer_borders
+            && self.pane_border_show_when_single_pane
+            && !self.pane_border_title.is_empty()
     }
 
     pub(crate) fn pane_exposes_host_cursor(
@@ -1859,6 +1881,8 @@ impl AppState {
             pane_scrollbars: true,
             pane_gaps: false,
             show_agent_labels_on_pane_borders: false,
+            pane_border_title: Vec::new(),
+            pane_border_show_when_single_pane: true,
             hide_tab_bar_when_single_tab: false,
             tab_bar_position: TabBarPositionConfig::Top,
             tab_bar_right: Vec::new(),

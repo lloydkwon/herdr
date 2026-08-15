@@ -255,6 +255,37 @@ yellow = "#f9e2af"
 
 ## UI とサイドバー
 
+ペインは上端の境界線にタイトルを表示します。エージェントがタイトルを付けたペインや、
+自分で名前を付けたペインはその名前のままです。それ以外は `[ui.pane_border]` の指定に従います。
+
+```toml
+[ui.pane_border]
+title = ["cwd", "agent"]
+show_when_single_pane = true
+```
+
+トークンは `cwd`、`agent`、`state_icon`、`state_text`、`branch`、`pane`、`workspace`、`tab`、
+`terminal_title`、`terminal_title_stripped`、そして `herdr pane report-metadata` で報告された値を
+指す `$name` です。`title = []` にすると境界線は空のままになります。
+
+分割ペインには書き込める境界線がすでにあります。分割していない単一ペインにはないので、
+上端に横罫線が 1 本だけ引かれます。タブ行のすぐ下に出るこの 1 行が
+`show_when_single_pane` の対象です。`false` にすると単一ペインは全高のままになり、
+分割ペインのタイトルはどちらでも変わりません。単一ペインの上端は外枠そのものなので、
+`pane_borders = false` と `pane_outer_borders = false` でもこの罫線は消えます。
+`title = []` の場合も、中身のない罫線に 1 行を使わないよう消えます。
+
+画面に見えるペインはすべて同じワークスペースとタブに属するため、`workspace` と `tab` は
+どのペインにも同じ文字を出します。実際に異なるのは `cwd` です。
+
+この罫線は端末の 1 行を消費します。特に影響が大きいのはモバイル表示で、単一ペインが
+基本かつ縦の余裕が最も少ない場面です。その 1 行を出力に使いたい場合は
+`show_when_single_pane` を off にしてください。
+
+検出されたエージェントは名前ではないので、境界線を独占しなくなりました。指定した他の
+トークンと並んで `agent` トークンとして出ます。従来の `show_agent_labels_on_pane_borders`
+スイッチと設定画面の Pane labels トグルは、タイトル全体ではなくこのトークンだけを消します。
+
 サイドバーは Herdr のメインダッシュボードです。サイズ、折りたたみモード、Agent パネルの並び順、マウスの挙動、ペインの境界線、その他の表示設定については、[設定リファレンス](/docs/config-reference/)で `ui.` を検索してください。
 
 ### 外側のターミナルのウィンドウタイトル

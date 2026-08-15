@@ -32,6 +32,12 @@ ROOT_STRUCT = "Config"
 # therefore not enumerable in a flat reference table.
 SKIPPED_SUBTREES = ("keys.command",)
 
+# Keys whose accepted values are not the enum's variant list, because the type
+# also accepts user-supplied names. Their variants would document a closed set
+# that is not the truth, so the reference describes them in prose instead. Kept
+# explicit, like SKIPPED_SUBTREES, so the omission stays reviewable.
+OPEN_ENDED_VALUE_KEYS = ("ui.pane_border.title",)
+
 FIELD_RE = re.compile(r"^\s*pub ([a-z_][a-z0-9_]*):\s*(.+?),?\s*$")
 STRUCT_RE = re.compile(r"^\s*pub(?:\(crate\))? struct ([A-Za-z0-9_]+)\s*\{\s*$")
 ENUM_RE = re.compile(r"^\s*pub(?:\(crate\))? enum ([A-Za-z0-9_]+)\s*\{\s*$")
@@ -242,7 +248,7 @@ def collect_entries(model: Model, struct_name: str = ROOT_STRUCT, prefix: str = 
             entries.extend(collect_entries(model, inner, f"{dotted}."))
         else:
             entry = {"key": dotted, "rust_type": struct_field.rust_type, "doc": struct_field.doc}
-            if inner in model.enums:
+            if inner in model.enums and dotted not in OPEN_ENDED_VALUE_KEYS:
                 entry["values"] = model.enums[inner]
             entries.append(entry)
     return entries

@@ -746,7 +746,19 @@
           "key": "ui.show_agent_labels_on_pane_borders",
           "type": "boolean",
           "default": "false",
-          "description": "Show agent labels in split pane borders when no manual pane label is set."
+          "description": "Let a pane border title name a detected agent through its `agent` token."
+        },
+        {
+          "key": "ui.pane_border.title",
+          "type": "list of tokens",
+          "default": "[\"cwd\", \"agent\"]",
+          "description": "Fields a pane's top border names when nothing has already titled it; a pane an agent titled or that you named keeps that name. Tokens: cwd, agent, state_icon, state_text, branch, pane, workspace, tab, terminal_title, terminal_title_stripped, and $name metadata tokens. Empty leaves borders blank. Every visible pane shares a workspace and tab, so workspace and tab repeat on all of them."
+        },
+        {
+          "key": "ui.pane_border.show_when_single_pane",
+          "type": "boolean",
+          "default": "true",
+          "description": "Give an unsplit pane a top border to carry the title."
         },
         {
           "key": "ui.hide_tab_bar_when_single_tab",

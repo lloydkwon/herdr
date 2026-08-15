@@ -1715,6 +1715,7 @@ impl App {
             self.state.pane_borders,
             self.state.pane_gaps,
             self.state.pane_outer_borders,
+            self.state.single_pane_border_enabled(),
         )
         .into_iter()
         .filter_map(|pane| {
