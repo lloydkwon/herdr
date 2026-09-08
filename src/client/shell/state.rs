@@ -958,6 +958,9 @@ pub(crate) struct ClientShellState {
     pub(super) pane_scroll_targets: HashMap<String, usize>,
     pub(super) copy_feedback: Option<crate::app::state::CopyFeedback>,
     pub(super) copy_feedback_deadline: Option<std::time::Instant>,
+    /// 경과 라벨(`state_elapsed`)이 다음에 바뀌는 시각. 시각을 아는 에이전트가 있고
+    /// 토큰이 설정된 경우에만 Some 이며, compose 가 매번 다시 계산한다.
+    pub(super) state_elapsed_repaint_deadline: Option<std::time::Instant>,
     pub(super) host_mouse_pixels: Option<crate::input::mouse::HostPixels>,
     pub(super) input_leases: ClientInputLeases,
     pub(super) popup_pending: bool,
@@ -1118,6 +1121,7 @@ impl ClientShellState {
             pane_scroll_targets: HashMap::new(),
             copy_feedback: None,
             copy_feedback_deadline: None,
+            state_elapsed_repaint_deadline: None,
             host_mouse_pixels: None,
             input_leases: ClientInputLeases::default(),
             popup_pending: false,
@@ -1305,6 +1309,7 @@ impl ClientShellState {
         self.reset_copy_pipeline();
         self.copy_feedback = None;
         self.copy_feedback_deadline = None;
+        self.state_elapsed_repaint_deadline = None;
         self.host_mouse_pixels = None;
         self.dismissed_product_announcement = None;
     }
@@ -1891,14 +1896,50 @@ impl ClientShellState {
         false
     }
 
+    /// 경과 라벨이 바뀔 시각이 지났으면 데드라인을 지우고 리페인트를 요청한다.
+    /// 지워 두면 compose 가 조기 반환해도 타이머가 회전하지 않고, 다음 compose 가 다시 건다.
+    pub(crate) fn tick_state_elapsed(&mut self, now: std::time::Instant) -> bool {
+        if self
+            .state_elapsed_repaint_deadline
+            .is_some_and(|deadline| now >= deadline)
+        {
+            self.state_elapsed_repaint_deadline = None;
+            return true;
+        }
+        false
+    }
+
+    /// 스냅샷의 에이전트 중 경과 라벨이 가장 먼저 바뀌는 unix ms 시각.
+    /// `state_elapsed` 토큰이 설정되지 않았거나 시각을 아는 에이전트가 없으면 None.
+    pub(crate) fn next_state_elapsed_label_change_unix_ms(&self, now_unix_ms: u64) -> Option<u64> {
+        if !self.config.agents.uses_state_elapsed() {
+            return None;
+        }
+        self.snapshot
+            .iter()
+            .map(|snapshot| snapshot.as_ref())
+            .chain(
+                self.endpoints
+                    .iter()
+                    .filter_map(|endpoint| endpoint.snapshot.as_deref()),
+            )
+            .flat_map(|snapshot| snapshot.agents.iter())
+            .filter_map(|agent| agent.state_changed_at_unix_ms)
+            .map(|changed_at| crate::ui::next_elapsed_label_change_unix_ms(changed_at, now_unix_ms))
+            .min()
+    }
+
     pub(crate) fn timer_delay(&self, now: std::time::Instant) -> std::time::Duration {
         let default = std::time::Duration::from_millis(100);
-        self.selection_autoscroll_deadline
-            .into_iter()
-            .chain(self.selection_repaint_deadline)
-            .min()
-            .map(|deadline| deadline.saturating_duration_since(now).min(default))
-            .unwrap_or(default)
+        [
+            self.selection_autoscroll_deadline,
+            self.selection_repaint_deadline,
+            self.state_elapsed_repaint_deadline,
+        ]
+        .into_iter()
+        .flatten()
+        .map(|deadline| deadline.saturating_duration_since(now))
+        .fold(default, std::cmp::min)
     }
 
     pub(crate) fn invalidate_pane_surface(&mut self) {

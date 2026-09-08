@@ -13,6 +13,7 @@ pub(crate) struct ResolvedToken {
 pub(crate) enum ResolvedTokenKind {
     StateIcon,
     StateText(String),
+    StateElapsed(String),
     Machine(String),
     Workspace(String),
     Tab(String),
@@ -28,6 +29,7 @@ impl ResolvedTokenKind {
     fn text_value(&self) -> Option<&str> {
         match self {
             Self::StateText(value)
+            | Self::StateElapsed(value)
             | Self::Machine(value)
             | Self::Workspace(value)
             | Self::Tab(value)
@@ -61,6 +63,8 @@ pub(crate) struct AgentTokenContext<'a> {
     pub(crate) terminal_title: Option<&'a str>,
     pub(crate) terminal_title_stripped: Option<&'a str>,
     pub(crate) canonical_agent: Option<crate::detect::Agent>,
+    /// 현재 상태에 머문 밀리초. 전이 시각을 모르면 None 이고 토큰은 생략된다.
+    pub(crate) state_elapsed_ms: Option<u64>,
     pub(crate) tokens: &'a std::collections::HashMap<String, String>,
 }
 
@@ -82,6 +86,9 @@ pub(crate) fn agent_rows(
                         AgentSidebarToken::StateText => {
                             Some(ResolvedTokenKind::StateText(state_text.to_string()))
                         }
+                        AgentSidebarToken::StateElapsed => context.state_elapsed_ms.map(|ms| {
+                            ResolvedTokenKind::StateElapsed(crate::ui::format_elapsed_label(ms))
+                        }),
                         AgentSidebarToken::Machine => context
                             .machine
                             .map(|value| ResolvedTokenKind::Machine(value.to_string())),
@@ -226,6 +233,7 @@ mod tests {
             terminal_title: entry.terminal_title.as_deref(),
             terminal_title_stripped: entry.terminal_title_stripped.as_deref(),
             canonical_agent: entry.canonical_agent,
+            state_elapsed_ms: None,
             tokens: &entry.tokens,
         }
     }
@@ -455,6 +463,34 @@ rows = [[{ token = "$load", rules = [{ lt = 50, hide = true }] }], ["workspace"]
                 ResolvedToken::unstyled(ResolvedTokenKind::Machine("Build".into())),
                 ResolvedToken::unstyled(ResolvedTokenKind::Workspace("repo".into())),
             ]]
+        );
+    }
+
+    #[test]
+    fn state_elapsed_token_renders_label_and_is_omitted_when_unknown() {
+        let entry = entry();
+        let config = AgentsSidebarConfig {
+            rows: vec![vec![
+                AgentSidebarToken::StateIcon,
+                AgentSidebarToken::StateElapsed,
+            ]],
+            ..Default::default()
+        };
+
+        let mut known = context(&entry);
+        known.state_elapsed_ms = Some(180_000);
+        assert_eq!(
+            agent_rows(&config, known, "working"),
+            vec![vec![
+                ResolvedToken::unstyled(ResolvedTokenKind::StateIcon),
+                ResolvedToken::unstyled(ResolvedTokenKind::StateElapsed("3분".into())),
+            ]]
+        );
+
+        // 전이 시각을 모르면 토큰 자체가 사라진다 (0 이나 "방금" 으로 채우지 않는다).
+        assert_eq!(
+            agent_rows(&config, context(&entry), "working"),
+            vec![vec![ResolvedToken::unstyled(ResolvedTokenKind::StateIcon)]]
         );
     }
 

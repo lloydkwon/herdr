@@ -7,9 +7,10 @@ pub(super) fn render_collapsed(
     endpoints: &[ClientShellEndpoint],
     active_endpoint_id: &ClientEndpointId,
     config: &ClientShellConfig,
+    now_unix_ms: u64,
     hits: &mut ShellHitMap,
 ) {
-    let rows = agent_rows(endpoints, active_endpoint_id, config);
+    let rows = agent_rows(endpoints, active_endpoint_id, config, now_unix_ms);
     for (index, row) in rows.into_iter().take(area.height as usize).enumerate() {
         let rect = Rect::new(area.x, area.y + index as u16, area.width, 1);
         if row.agent.focused {
@@ -49,6 +50,7 @@ pub(super) fn render_expanded(
     endpoints: &[ClientShellEndpoint],
     active_endpoint_id: &ClientEndpointId,
     config: &ClientShellConfig,
+    now_unix_ms: u64,
     agent_scroll: &mut usize,
     hits: &mut ShellHitMap,
 ) {
@@ -61,7 +63,7 @@ pub(super) fn render_expanded(
     ) {
         return;
     }
-    let rows = agent_rows(endpoints, active_endpoint_id, config);
+    let rows = agent_rows(endpoints, active_endpoint_id, config, now_unix_ms);
     super::agent_sidebar::render_agent_list(
         buffer,
         area,
@@ -98,6 +100,7 @@ fn agent_rows(
     endpoints: &[ClientShellEndpoint],
     active_endpoint_id: &ClientEndpointId,
     config: &ClientShellConfig,
+    now_unix_ms: u64,
 ) -> Vec<EndpointAgentRow> {
     let mut rendered_rows = endpoints
         .iter()
@@ -112,6 +115,7 @@ fn agent_rows(
                             &agent.pane_id,
                             config,
                             Some(&endpoint.label),
+                            now_unix_ms,
                         )
                     })
                     .map(|agent| ((endpoint.endpoint_id.clone(), agent.pane_id.clone()), agent))

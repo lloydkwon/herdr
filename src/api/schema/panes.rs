@@ -556,6 +556,9 @@ pub struct PaneInfo {
     pub agent_session: Option<AgentSessionInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scroll: Option<PaneScrollInfo>,
+    /// Wall-clock unix milliseconds of the last agent state transition. Absent when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_changed_at_unix_ms: Option<u64>,
     pub revision: u64,
 }
 

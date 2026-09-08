@@ -24,6 +24,10 @@ pub(crate) struct AgentPanelEntry {
     pub state: AgentState,
     pub seen: bool,
     pub last_agent_state_change_seq: Option<u64>,
+    // 집계 경로(PaneDetail) 를 그대로 통과시킨 값. 사이드바는 클라이언트 스냅샷으로 그리므로
+    // 서버 측 소비자가 아직 없어 dead_code 경고를 억제한다.
+    #[allow(dead_code)]
+    pub last_agent_state_changed_at_unix_ms: Option<u64>,
     pub tokens: std::collections::HashMap<String, String>,
 }
 
@@ -95,6 +99,7 @@ pub(crate) fn agent_panel_entries_from(
                     state: detail.state,
                     seen: detail.seen,
                     last_agent_state_change_seq: detail.last_agent_state_change_seq,
+                    last_agent_state_changed_at_unix_ms: detail.last_agent_state_changed_at_unix_ms,
                     tokens: detail.tokens,
                 })
         })
@@ -129,6 +134,7 @@ pub(crate) fn resolved_token_spans(
         .iter()
         .map(|token| match &token.kind {
             ResolvedTokenKind::StateText(text)
+            | ResolvedTokenKind::StateElapsed(text)
             | ResolvedTokenKind::Machine(text)
             | ResolvedTokenKind::Workspace(text)
             | ResolvedTokenKind::Tab(text)
@@ -236,6 +242,7 @@ pub(crate) fn resolved_token_spans(
                 apply_token_style(workspace_style, token.style),
             )),
             ResolvedTokenKind::Machine(text)
+            | ResolvedTokenKind::StateElapsed(text)
             | ResolvedTokenKind::Tab(text)
             | ResolvedTokenKind::Pane(text)
             | ResolvedTokenKind::Agent(text)

@@ -1014,6 +1014,7 @@ mod tests {
             tokens: HashMap::new(),
             agent_session: None,
             scroll: None,
+            state_changed_at_unix_ms: None,
             revision: 0,
         }
     }

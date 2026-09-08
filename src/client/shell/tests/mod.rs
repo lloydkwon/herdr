@@ -197,6 +197,7 @@ fn pane_scroll_result(
                 max_offset_from_bottom,
                 viewport_rows,
             }),
+            state_changed_at_unix_ms: None,
             revision: 0,
         },
     }

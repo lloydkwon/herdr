@@ -419,6 +419,7 @@ pub(crate) fn render_sidebar(
         detail_area,
         snapshot,
         config,
+        state.now_unix_ms,
         state.agent_scroll,
         hits,
     );

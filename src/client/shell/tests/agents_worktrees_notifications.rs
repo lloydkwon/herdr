@@ -359,6 +359,7 @@ fn pane_cycle_last_and_agent_actions_resolve_to_stable_pane_ids() {
             terminal_title_stripped: None,
             agent_status: AgentStatus::Idle,
             state_change_seq: 1,
+            state_changed_at_unix_ms: None,
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: true,
@@ -375,6 +376,7 @@ fn pane_cycle_last_and_agent_actions_resolve_to_stable_pane_ids() {
             terminal_title_stripped: None,
             agent_status: AgentStatus::Idle,
             state_change_seq: 2,
+            state_changed_at_unix_ms: None,
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: false,
@@ -449,6 +451,7 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
             terminal_title_stripped: Some("first".into()),
             agent_status: AgentStatus::Done,
             state_change_seq: 10,
+            state_changed_at_unix_ms: None,
             state_labels: Vec::new(),
             tokens: vec![("summary".into(), "review complete".into())],
             focused: true,
@@ -465,6 +468,7 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
             terminal_title_stripped: Some("second".into()),
             agent_status: AgentStatus::Blocked,
             state_change_seq: 20,
+            state_changed_at_unix_ms: None,
             state_labels: vec![("blocked".into(), "needs input".into())],
             tokens: vec![("summary".into(), "waiting for Can".into())],
             focused: false,
@@ -655,6 +659,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
             terminal_title_stripped: None,
             agent_status: AgentStatus::Idle,
             state_change_seq: 1,
+            state_changed_at_unix_ms: None,
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: true,
@@ -671,6 +676,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
             terminal_title_stripped: None,
             agent_status: AgentStatus::Blocked,
             state_change_seq: 2,
+            state_changed_at_unix_ms: None,
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: false,
@@ -687,6 +693,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
             terminal_title_stripped: None,
             agent_status: AgentStatus::Idle,
             state_change_seq: 3,
+            state_changed_at_unix_ms: None,
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: false,
@@ -761,6 +768,7 @@ fn agent_sort_toggle_is_client_local_and_persists_per_endpoint() {
         terminal_title_stripped: None,
         agent_status: AgentStatus::Working,
         state_change_seq: 1,
+        state_changed_at_unix_ms: None,
         state_labels: Vec::new(),
         tokens: Vec::new(),
         focused: true,
@@ -1326,6 +1334,7 @@ fn semantic_notifications_use_client_policy_and_stable_navigation_targets() {
         terminal_title_stripped: None,
         agent_status: AgentStatus::Blocked,
         state_change_seq: 1,
+        state_changed_at_unix_ms: None,
         state_labels: Vec::new(),
         tokens: Vec::new(),
         focused: false,
@@ -1461,4 +1470,93 @@ fn semantic_notifications_use_client_policy_and_stable_navigation_targets() {
     assert!(repaint);
     assert!(state.visible_notification.is_none());
     assert_eq!(state.pending_notifications.len(), 1);
+}
+
+#[test]
+fn agent_sidebar_shows_state_elapsed_label_and_arms_repaint_deadline() {
+    let mut projected = snapshot();
+    let mut second_pane = projected.panes[0].clone();
+    second_pane.pane_id = "pane_2".into();
+    second_pane.focused = false;
+    projected.panes.push(second_pane);
+    let now_unix_ms = crate::clock::unix_ms_now();
+    projected.agents = vec![
+        ClientShellAgent {
+            pane_id: "pane_1".into(),
+            workspace_id: "ws_1".into(),
+            tab_id: "tab_1".into(),
+            name: Some("pi one".into()),
+            display_agent: None,
+            agent: Some("pi".into()),
+            title: None,
+            terminal_title: None,
+            terminal_title_stripped: None,
+            agent_status: AgentStatus::Working,
+            state_change_seq: 10,
+            state_changed_at_unix_ms: Some(now_unix_ms - 180_500),
+            state_labels: Vec::new(),
+            tokens: Vec::new(),
+            focused: true,
+        },
+        ClientShellAgent {
+            pane_id: "pane_2".into(),
+            workspace_id: "ws_1".into(),
+            tab_id: "tab_1".into(),
+            name: Some("pi two".into()),
+            display_agent: None,
+            agent: Some("pi".into()),
+            title: None,
+            terminal_title: None,
+            terminal_title_stripped: None,
+            agent_status: AgentStatus::Idle,
+            state_change_seq: 20,
+            state_changed_at_unix_ms: None,
+            state_labels: Vec::new(),
+            tokens: Vec::new(),
+            focused: false,
+        },
+    ];
+    let mut config = Config::default();
+    config.ui.sidebar.agents.rows = vec![vec![
+        crate::config::AgentSidebarToken::StateIcon,
+        crate::config::AgentSidebarToken::Agent,
+        crate::config::AgentSidebarToken::StateElapsed,
+    ]];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(projected.clone()));
+    state.set_pane_surface(surface());
+
+    let frame = state.compose(106, 30).expect("agent sidebar frame");
+    let text = frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("pi one · 3분"), "frame: {text}");
+    assert!(text.contains("pi two"), "frame: {text}");
+    assert!(
+        !text.contains("pi two ·"),
+        "unknown timestamp must not render a label: {text}"
+    );
+
+    // 3분 0.5초 경과 → 다음 라벨 변화(4분)까지 데드라인이 걸린다.
+    let deadline = state
+        .state_elapsed_repaint_deadline
+        .expect("elapsed label arms a repaint deadline");
+    assert!(!state.tick_state_elapsed(deadline - std::time::Duration::from_millis(1)));
+    assert!(state.tick_state_elapsed(deadline));
+    assert!(state.state_elapsed_repaint_deadline.is_none());
+
+    // 토큰이 없으면 시각을 알아도 타이머를 걸지 않는다.
+    config.ui.sidebar.agents.rows = vec![vec![crate::config::AgentSidebarToken::StateIcon]];
+    let mut without = ClientShellState::new(ClientShellConfig::from_config(&config));
+    without.set_snapshot(Box::new(projected));
+    without.set_pane_surface(surface());
+    without.compose(106, 30).expect("agent sidebar frame");
+    assert!(without.state_elapsed_repaint_deadline.is_none());
 }

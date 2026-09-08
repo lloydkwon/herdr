@@ -572,6 +572,20 @@ fn restore_tab(
             continue;
         }
 
+        // 핸드오프로 넘어온 에이전트 상태와 전이 시각. 런타임이 `imported.state` 를 가져가기 전에 꺼낸다.
+        #[cfg(unix)]
+        let imported_agent_transition: Option<(Option<AgentState>, Option<u64>)> =
+            imported_runtime.as_ref().map(|imported| {
+                (
+                    imported.state.agent_state.as_deref().and_then(
+                        crate::handoff_runtime::HandoffRuntimeState::parse_agent_state_label,
+                    ),
+                    imported.state.agent_state_changed_at_unix_ms,
+                )
+            });
+        #[cfg(not(unix))]
+        let imported_agent_transition: Option<(Option<AgentState>, Option<u64>)> = None;
+
         let runtime_result = {
             #[cfg(unix)]
             if let Some(imported) = imported_runtime {
@@ -650,15 +664,23 @@ fn restore_tab(
                     (None, _) => {}
                 }
                 if let Some(agent) = initial_restore_agent {
+                    // 핸드오프로 넘어온 상태가 있으면 그대로 복원해 Idle→Working 가짜 전이가
+                    // 전이 시각을 덮어쓰지 않게 한다. 없으면 기존처럼 Idle 에서 시작한다.
+                    let (restore_state, restored_changed_at_unix_ms) = imported_agent_transition
+                        .filter(|_| was_imported)
+                        .map_or((AgentState::Idle, None), |(state, changed_at)| {
+                            (state.unwrap_or(AgentState::Idle), changed_at)
+                        });
                     let _ = terminal.set_detected_state_with_screen_signals_at(
                         Some(agent),
-                        AgentState::Idle,
+                        restore_state,
                         false,
                         false,
                         false,
                         false,
                         std::time::Instant::now(),
                     );
+                    terminal.last_agent_state_changed_at_unix_ms = restored_changed_at_unix_ms;
                 }
                 panes.insert(*id, PaneState::new(terminal_id.clone()));
                 terminal_runtimes.insert(terminal_id, runtime);

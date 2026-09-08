@@ -631,6 +631,7 @@ mod tests {
             tokens: HashMap::new(),
             agent_session: None,
             scroll,
+            state_changed_at_unix_ms: None,
             revision: 0,
         }
     }
