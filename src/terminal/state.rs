@@ -142,6 +142,8 @@ pub struct TerminalState {
     metadata_token_sequence_sources: std::collections::HashSet<String>,
     pub state: AgentState,
     pub last_agent_state_change_seq: Option<u64>,
+    /// 마지막 상태 전이의 벽시계 시각(unix ms). 모르면 None 이며, seq 와 함께 리셋된다.
+    pub last_agent_state_changed_at_unix_ms: Option<u64>,
     pub revision: u64,
     pub launch_argv: Option<Vec<String>>,
     pub respawn_shell_on_exit: bool,
@@ -177,6 +179,7 @@ impl TerminalState {
             metadata_token_sequence_sources: std::collections::HashSet::new(),
             state: AgentState::Unknown,
             last_agent_state_change_seq: None,
+            last_agent_state_changed_at_unix_ms: None,
             revision: 0,
             launch_argv: None,
             respawn_shell_on_exit: false,
@@ -2083,6 +2086,7 @@ impl TerminalState {
         self.stale_full_lifecycle_hook_sessions.clear();
         self.state = AgentState::Unknown;
         self.last_agent_state_change_seq = None;
+        self.last_agent_state_changed_at_unix_ms = None;
         self.launch_argv = None;
         self.respawn_shell_on_exit = false;
         self.recent_agent_process_exit = None;
@@ -5761,6 +5765,19 @@ mod tests {
         assert!(terminal.persisted_agent_session.is_none());
         assert!(!terminal.respawn_shell_on_exit);
         assert!(!terminal.finish_agent_process_acquisition());
+    }
+
+    #[test]
+    fn respawn_cleanup_resets_state_change_seq_and_timestamp_together() {
+        let mut terminal = test_terminal();
+        terminal.last_agent_state_change_seq = Some(3);
+        terminal.last_agent_state_changed_at_unix_ms = Some(9);
+
+        terminal.clear_agent_runtime_identity_after_respawn();
+
+        // 하나만 리셋되면 죽은 시각이 새 세션에 붙으므로 둘 다 None 이어야 한다.
+        assert_eq!(terminal.last_agent_state_change_seq, None);
+        assert_eq!(terminal.last_agent_state_changed_at_unix_ms, None);
     }
 
     #[test]

@@ -27,6 +27,12 @@ pub(crate) struct HandoffRuntimeState {
     pub terminal_title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_history_ansi: Option<String>,
+    /// 핸드오프 시점의 에이전트 상태 라벨(`idle` / `working`). 구버전 manifest 에는 없다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_state: Option<String>,
+    /// 핸드오프 시점 에이전트 상태의 전이 시각(unix ms). 구버전 manifest 에는 없다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_state_changed_at_unix_ms: Option<u64>,
 }
 
 #[cfg(unix)]
@@ -34,6 +40,25 @@ impl HandoffRuntimeState {
     pub fn with_pane_id(mut self, pane_id: crate::layout::PaneId) -> Self {
         self.pane_id = pane_id.raw();
         self
+    }
+
+    /// 핸드오프로 넘길 상태 라벨. `Blocked` 는 화면 신호(visible_blocker) 없이 복원할 수 없고
+    /// `Unknown` 은 넘길 정보가 없으므로 둘 다 None 이다.
+    pub fn agent_state_label(state: crate::detect::AgentState) -> Option<&'static str> {
+        match state {
+            crate::detect::AgentState::Idle => Some("idle"),
+            crate::detect::AgentState::Working => Some("working"),
+            crate::detect::AgentState::Blocked | crate::detect::AgentState::Unknown => None,
+        }
+    }
+
+    /// `agent_state_label` 의 역변환. 모르는 라벨은 None 으로 무시한다.
+    pub fn parse_agent_state_label(label: &str) -> Option<crate::detect::AgentState> {
+        match label {
+            "idle" => Some(crate::detect::AgentState::Idle),
+            "working" => Some(crate::detect::AgentState::Working),
+            _ => None,
+        }
     }
 }
 

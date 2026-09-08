@@ -147,6 +147,7 @@ pub(super) fn snapshot(
                 terminal_title_stripped: agent.terminal_title_stripped,
                 agent_status: agent.agent_status,
                 state_change_seq: agent.state_change_seq,
+                state_changed_at_unix_ms: agent.state_changed_at_unix_ms,
                 state_labels,
                 tokens,
                 focused,

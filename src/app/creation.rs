@@ -351,6 +351,7 @@ impl App {
             tokens: terminal.metadata_tokens.values(),
             agent_session: terminal_agent_session_info(terminal),
             scroll,
+            state_changed_at_unix_ms: terminal.last_agent_state_changed_at_unix_ms,
             revision: terminal.revision,
         })
     }

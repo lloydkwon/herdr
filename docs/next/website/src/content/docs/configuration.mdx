@@ -356,7 +356,7 @@ The expanded desktop sidebar renders each inner array in `rows` as one line. The
 [ui.sidebar.agents]
 row_gap = 0
 rows = [
-  ["state_icon", "machine", "workspace", "tab"],
+  ["state_icon", "machine", "workspace", "tab", "state_elapsed"],
   ["agent"],
 ]
 
@@ -372,6 +372,7 @@ Agent rows accept these built-in tokens:
 
 - `state_icon` — colored icon for the agent's semantic state.
 - `state_text` — `idle`, `working`, `blocked`, `done`, or `unknown`, including a reported display label when present.
+- `state_elapsed` — how long the agent has been in its current state, rendered as `12초`, `3분`, or `1시간 20분`. Computed at render time from `state_changed_at_unix_ms`; omitted when the transition time is unknown, for example right after a cold restore.
 - `machine` — machine label when the client has multiple machines; omitted for a single local machine.
 - `workspace` — workspace name.
 - `tab` — tab name when available.

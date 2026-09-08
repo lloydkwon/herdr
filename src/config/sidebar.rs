@@ -108,6 +108,7 @@ pub struct SidebarTokenStyle {
 pub enum AgentSidebarToken {
     StateIcon,
     StateText,
+    StateElapsed,
     Machine,
     Workspace,
     Tab,
@@ -272,6 +273,7 @@ fn agent_token_name(token: &AgentSidebarToken) -> String {
     match token {
         AgentSidebarToken::StateIcon => "state_icon".into(),
         AgentSidebarToken::StateText => "state_text".into(),
+        AgentSidebarToken::StateElapsed => "state_elapsed".into(),
         AgentSidebarToken::Machine => "machine".into(),
         AgentSidebarToken::Workspace => "workspace".into(),
         AgentSidebarToken::Tab => "tab".into(),
@@ -331,6 +333,7 @@ impl<'de> Deserialize<'de> for AgentSidebarToken {
             &[
                 ("state_icon", Self::StateIcon),
                 ("state_text", Self::StateText),
+                ("state_elapsed", Self::StateElapsed),
                 ("machine", Self::Machine),
                 ("workspace", Self::Workspace),
                 ("tab", Self::Tab),
@@ -435,6 +438,15 @@ impl AgentsSidebarConfig {
             .and_then(|agent| self.rows_by_agent.get(crate::detect::agent_label(agent)))
             .unwrap_or(&self.rows)
     }
+
+    /// 어느 행에든 `state_elapsed` 토큰이 있으면 true. 경과 라벨 리페인트 타이머의 게이트로 쓴다.
+    pub(crate) fn uses_state_elapsed(&self) -> bool {
+        std::iter::once(&self.rows)
+            .chain(self.rows_by_agent.values())
+            .flatten()
+            .flatten()
+            .any(|token| matches!(token.parts().0, AgentSidebarToken::StateElapsed))
+    }
 }
 
 impl Default for AgentsSidebarConfig {
@@ -446,6 +458,7 @@ impl Default for AgentsSidebarConfig {
                     AgentSidebarToken::Machine,
                     AgentSidebarToken::Workspace,
                     AgentSidebarToken::Tab,
+                    AgentSidebarToken::StateElapsed,
                 ],
                 vec![AgentSidebarToken::Agent],
             ],
@@ -497,6 +510,7 @@ mod tests {
                     AgentSidebarToken::Machine,
                     AgentSidebarToken::Workspace,
                     AgentSidebarToken::Tab,
+                    AgentSidebarToken::StateElapsed,
                 ],
                 vec![AgentSidebarToken::Agent],
             ]
@@ -511,6 +525,36 @@ mod tests {
             ]
         );
         assert_eq!(config.spaces.row_gap, 0);
+    }
+
+    #[test]
+    fn state_elapsed_token_parses_and_gates_elapsed_repaint() {
+        let config: crate::config::Config = toml::from_str(
+            r#"
+[ui.sidebar.agents]
+rows = [["state_icon", "state_elapsed"]]
+"#,
+        )
+        .expect("state_elapsed config");
+        assert_eq!(
+            config.ui.sidebar.agents.rows,
+            vec![vec![
+                AgentSidebarToken::StateIcon,
+                AgentSidebarToken::StateElapsed
+            ]]
+        );
+        assert!(config.ui.sidebar.agents.uses_state_elapsed());
+        assert!(AgentsSidebarConfig::default().uses_state_elapsed());
+
+        let mut without = AgentsSidebarConfig {
+            rows: vec![vec![AgentSidebarToken::StateIcon]],
+            ..Default::default()
+        };
+        assert!(!without.uses_state_elapsed());
+        without
+            .rows_by_agent
+            .insert("claude".into(), vec![vec![AgentSidebarToken::StateElapsed]]);
+        assert!(without.uses_state_elapsed());
     }
 
     #[test]

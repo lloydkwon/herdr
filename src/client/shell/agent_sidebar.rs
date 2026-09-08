@@ -54,6 +54,7 @@ pub(super) fn render_agent_panel(
     area: Rect,
     snapshot: &ClientShellSnapshot,
     config: &ClientShellConfig,
+    now_unix_ms: u64,
     agent_scroll: &mut usize,
     hits: &mut ShellHitMap,
 ) {
@@ -67,7 +68,7 @@ pub(super) fn render_agent_panel(
         return;
     }
 
-    let rows = agent_rows(snapshot, config, None);
+    let rows = agent_rows(snapshot, config, None, now_unix_ms);
     render_agent_list(
         buffer,
         area,
@@ -238,6 +239,7 @@ pub(super) fn agent_rows(
     snapshot: &ClientShellSnapshot,
     config: &ClientShellConfig,
     machine: Option<&str>,
+    now_unix_ms: u64,
 ) -> Vec<AgentRow> {
     ordered_agent_pane_ids(snapshot, config.agent_panel_sort)
         .into_iter()
@@ -297,6 +299,9 @@ pub(super) fn agent_rows(
                     terminal_title: agent.terminal_title.as_deref(),
                     terminal_title_stripped: agent.terminal_title_stripped.as_deref(),
                     canonical_agent,
+                    state_elapsed_ms: agent
+                        .state_changed_at_unix_ms
+                        .map(|changed_at| crate::clock::elapsed_ms(changed_at, now_unix_ms)),
                     tokens: &tokens,
                 },
                 state_text,

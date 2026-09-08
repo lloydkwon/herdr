@@ -7,9 +7,10 @@ pub(super) fn render_collapsed(
     endpoints: &[ClientShellEndpoint],
     active_endpoint_id: &ClientEndpointId,
     config: &ClientShellConfig,
+    now_unix_ms: u64,
     hits: &mut ShellHitMap,
 ) {
-    let rows = agent_rows(endpoints, active_endpoint_id, config);
+    let rows = agent_rows(endpoints, active_endpoint_id, config, now_unix_ms);
     for (index, row) in rows.into_iter().take(area.height as usize).enumerate() {
         let rect = Rect::new(area.x, area.y + index as u16, area.width, 1);
         if row.agent.focused {
@@ -49,6 +50,7 @@ pub(super) fn render_expanded(
     endpoints: &[ClientShellEndpoint],
     active_endpoint_id: &ClientEndpointId,
     config: &ClientShellConfig,
+    now_unix_ms: u64,
     agent_scroll: &mut usize,
     hits: &mut ShellHitMap,
 ) {
@@ -61,7 +63,7 @@ pub(super) fn render_expanded(
     ) {
         return;
     }
-    let rows = agent_rows(endpoints, active_endpoint_id, config);
+    let rows = agent_rows(endpoints, active_endpoint_id, config, now_unix_ms);
     super::agent_sidebar::render_agent_list(
         buffer,
         area,
@@ -98,15 +100,21 @@ fn agent_rows(
     endpoints: &[ClientShellEndpoint],
     active_endpoint_id: &ClientEndpointId,
     config: &ClientShellConfig,
+    now_unix_ms: u64,
 ) -> Vec<EndpointAgentRow> {
     let mut rendered_rows = endpoints
         .iter()
         .filter_map(|endpoint| {
             endpoint.snapshot.as_deref().map(|snapshot| {
-                super::agent_sidebar::agent_rows(snapshot, config, Some(&endpoint.label))
-                    .into_iter()
-                    .map(|agent| ((endpoint.endpoint_id.clone(), agent.pane_id.clone()), agent))
-                    .collect::<Vec<_>>()
+                super::agent_sidebar::agent_rows(
+                    snapshot,
+                    config,
+                    Some(&endpoint.label),
+                    now_unix_ms,
+                )
+                .into_iter()
+                .map(|agent| ((endpoint.endpoint_id.clone(), agent.pane_id.clone()), agent))
+                .collect::<Vec<_>>()
             })
         })
         .flatten()

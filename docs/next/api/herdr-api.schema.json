@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "protocol": 22,
+  "protocol": 23,
   "schema_version": 1,
   "schemas": {
     "error_response": {
@@ -821,6 +821,15 @@
                 {
                   "type": "null"
                 }
+              ]
+            },
+            "state_changed_at_unix_ms": {
+              "description": "Wall-clock unix milliseconds of the last agent state transition. Absent when unknown.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
               ]
             },
             "state_labels": {
@@ -6677,6 +6686,15 @@
               "minimum": 0,
               "type": "integer"
             },
+            "state_changed_at_unix_ms": {
+              "description": "Wall-clock unix milliseconds of the last agent state transition. Absent when unknown.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "state_labels": {
               "additionalProperties": {
                 "type": "string"
@@ -7986,6 +8004,15 @@
                 {
                   "type": "null"
                 }
+              ]
+            },
+            "state_changed_at_unix_ms": {
+              "description": "Wall-clock unix milliseconds of the last agent state transition. Absent when unknown.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
               ]
             },
             "state_labels": {

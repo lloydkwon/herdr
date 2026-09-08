@@ -56,6 +56,7 @@ impl ClientShellState {
                 selected_workspace_id: self.navigate_workspace_id.as_deref(),
                 dragged_workspace_id: None,
                 workspace_drop_indicator_row: None,
+                now_unix_ms: crate::clock::unix_ms_now(),
             },
             &mut self.hits,
         );
@@ -100,6 +101,14 @@ impl ClientShellState {
 
     pub(crate) fn compose(&mut self, cols: u16, rows: u16) -> Option<FrameData> {
         self.last_composed_size = Some((cols, rows));
+        // 렌더는 입력에 대해 순수하게 유지한다: 시각은 여기서 한 번만 읽어 전달한다.
+        let now_unix_ms = crate::clock::unix_ms_now();
+        self.state_elapsed_repaint_deadline = self
+            .next_state_elapsed_label_change_unix_ms(now_unix_ms)
+            .map(|at| {
+                std::time::Instant::now()
+                    + std::time::Duration::from_millis(at.saturating_sub(now_unix_ms))
+            });
         if self.snapshot.is_none() || self.pane_surface.is_none() {
             return Some(self.compose_unavailable(cols, rows));
         }
@@ -156,6 +165,7 @@ impl ClientShellState {
                     .flatten(),
                 dragged_workspace_id,
                 workspace_drop_indicator_row,
+                now_unix_ms,
             },
         );
         self.hits.panes = surface

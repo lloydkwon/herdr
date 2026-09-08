@@ -1875,6 +1875,8 @@ impl AppState {
             self.next_agent_state_change_seq += 1;
             if let Some(terminal) = self.terminals.get_mut(&terminal_id) {
                 terminal.last_agent_state_change_seq = Some(self.next_agent_state_change_seq);
+                // 상태가 실제로 바뀐 이 자리에서만 전이 시각을 기록한다.
+                terminal.last_agent_state_changed_at_unix_ms = Some(crate::clock::unix_ms_now());
             }
         }
         let seen = self.apply_pane_state_change(ws_idx, pane_id, &change, suppress_completion)?;
@@ -2904,6 +2906,77 @@ mod tests {
         let terminal = state.terminals.get(&terminal_id).unwrap();
         assert_eq!(terminal.state, AgentState::Working);
         assert_eq!(terminal.detected_agent, Some(Agent::Pi));
+    }
+
+    fn report_state(state: &mut AppState, pane_id: PaneId, agent_state: AgentState) {
+        state.handle_app_event(AppEvent::StateChanged {
+            pane_id,
+            agent: Some(Agent::Pi),
+            state: agent_state,
+            visible_blocker: false,
+            visible_working: false,
+            process_exited: false,
+            observed_at: std::time::Instant::now(),
+        });
+    }
+
+    fn terminal_for_pane(state: &AppState, pane_id: PaneId) -> &crate::terminal::TerminalState {
+        let terminal_id = &state.workspaces[0]
+            .panes
+            .get(&pane_id)
+            .unwrap()
+            .attached_terminal_id;
+        state.terminals.get(terminal_id).unwrap()
+    }
+
+    #[test]
+    fn state_change_records_wall_clock_timestamp_with_seq() {
+        let mut state = app_with_workspaces(&["test"]);
+        let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
+        assert!(terminal_for_pane(&state, pane_id)
+            .last_agent_state_changed_at_unix_ms
+            .is_none());
+
+        let before = crate::clock::unix_ms_now();
+        report_state(&mut state, pane_id, AgentState::Working);
+        let after = crate::clock::unix_ms_now();
+
+        let terminal = terminal_for_pane(&state, pane_id);
+        assert!(terminal.last_agent_state_change_seq.is_some());
+        let changed_at = terminal
+            .last_agent_state_changed_at_unix_ms
+            .expect("state change records a wall-clock timestamp");
+        assert!(
+            before <= changed_at && changed_at <= after,
+            "{before} <= {changed_at} <= {after}"
+        );
+    }
+
+    #[test]
+    fn same_state_report_keeps_timestamp_and_seq() {
+        let mut state = app_with_workspaces(&["test"]);
+        let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
+        report_state(&mut state, pane_id, AgentState::Working);
+        let terminal_id = state.workspaces[0]
+            .panes
+            .get(&pane_id)
+            .unwrap()
+            .attached_terminal_id
+            .clone();
+        let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.last_agent_state_changed_at_unix_ms = Some(1);
+        let seq = terminal.last_agent_state_change_seq;
+
+        // 같은 상태를 다시 보고해도 전이가 아니므로 시각과 seq 가 그대로여야 한다.
+        report_state(&mut state, pane_id, AgentState::Working);
+        let terminal = terminal_for_pane(&state, pane_id);
+        assert_eq!(terminal.last_agent_state_changed_at_unix_ms, Some(1));
+        assert_eq!(terminal.last_agent_state_change_seq, seq);
+
+        report_state(&mut state, pane_id, AgentState::Idle);
+        let terminal = terminal_for_pane(&state, pane_id);
+        assert_ne!(terminal.last_agent_state_changed_at_unix_ms, Some(1));
+        assert_ne!(terminal.last_agent_state_change_seq, seq);
     }
 
     #[test]

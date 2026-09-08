@@ -3,7 +3,6 @@ use std::fmt;
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::api::schema::{
     InstalledPluginInfo, Method, PluginActionInvokeParams, PluginActionListParams,
@@ -200,8 +199,12 @@ fn plugin_install(args: &[String]) -> std::io::Result<i32> {
         let existing = installed_plugin_info(&preview_plugin.plugin_id)?;
         ensure_replacement_allowed(&preview_plugin, existing.as_ref())?;
 
-        let mut source_info =
-            source.to_source_info(requested_ref, resolved_commit, None, current_unix_ms());
+        let mut source_info = source.to_source_info(
+            requested_ref,
+            resolved_commit,
+            None,
+            crate::clock::unix_ms_now(),
+        );
         print_install_preview(&preview_plugin, &source_info, existing.as_ref());
         if !yes && !confirm("Install this plugin?")? {
             eprintln!("plugin install cancelled");
@@ -1559,7 +1562,7 @@ fn create_plugin_temp_dir(label: &str) -> std::io::Result<PathBuf> {
     let path = crate::plugin_paths::managed_plugins_dir().join(format!(
         ".tmp-{label}-{}-{}",
         std::process::id(),
-        current_unix_ms()
+        crate::clock::unix_ms_now()
     ));
     std::fs::create_dir_all(&path)?;
     Ok(path)
@@ -1608,13 +1611,6 @@ fn is_expected_managed_path(plugin: &InstalledPluginInfo, path: &Path) -> bool {
         return false;
     };
     path == expected
-}
-
-fn current_unix_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 fn is_connection_error(err: &std::io::Error) -> bool {
@@ -1670,6 +1666,8 @@ fn print_plugin_pane_help() {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use super::*;
 
     fn unique_plugin_id(label: &str) -> String {

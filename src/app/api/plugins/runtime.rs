@@ -35,7 +35,7 @@ impl App {
             .map_err(|err| ("plugin_user_dir_create_failed", err.to_string()))?;
         let log_id = format!("plugin-log-{}", self.state.next_plugin_command_log_id);
         self.state.next_plugin_command_log_id += 1;
-        let started_unix_ms = current_unix_ms();
+        let started_unix_ms = crate::clock::unix_ms_now();
         let mut env = super::env::plugin_path_env(plugin);
         env.extend([
             (
@@ -142,7 +142,7 @@ impl App {
                     match child.wait() {
                         Ok(status) => crate::events::AppEvent::PluginCommandFinished {
                             log_id,
-                            finished_unix_ms: current_unix_ms(),
+                            finished_unix_ms: crate::clock::unix_ms_now(),
                             exit_code: status.code(),
                             stdout: stdout_reader
                                 .and_then(|reader| reader.join().ok())
@@ -154,7 +154,7 @@ impl App {
                         },
                         Err(err) => crate::events::AppEvent::PluginCommandFinished {
                             log_id,
-                            finished_unix_ms: current_unix_ms(),
+                            finished_unix_ms: crate::clock::unix_ms_now(),
                             exit_code: None,
                             stdout: stdout_reader
                                 .and_then(|reader| reader.join().ok())
@@ -168,7 +168,7 @@ impl App {
                 }
                 Err(err) => crate::events::AppEvent::PluginCommandFinished {
                     log_id,
-                    finished_unix_ms: current_unix_ms(),
+                    finished_unix_ms: crate::clock::unix_ms_now(),
                     exit_code: None,
                     stdout: String::new(),
                     stderr: String::new(),
@@ -272,13 +272,6 @@ impl App {
             self.state.plugin_command_logs.drain(0..extra);
         }
     }
-}
-
-fn current_unix_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
-        .unwrap_or(0)
 }
 
 pub(super) fn read_capped_plugin_output(mut reader: impl Read, cap: usize) -> String {

@@ -226,6 +226,8 @@ pub(super) struct ShellRenderState<'a> {
     pub(super) selected_workspace_id: Option<&'a str>,
     pub(super) dragged_workspace_id: Option<&'a str>,
     pub(super) workspace_drop_indicator_row: Option<u16>,
+    /// 프레임당 한 번 계산한 현재 시각(unix ms). 경과 라벨은 이 값으로만 계산한다.
+    pub(super) now_unix_ms: u64,
 }
 
 pub(super) fn render_shell(

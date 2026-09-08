@@ -1447,6 +1447,19 @@ fn live_handoff_keeps_unmanaged_agent_name_bound_to_saved_session() {
             "params": {"target": pane_id, "name": "reviewer"}
         }),
     ));
+    let before_handoff = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:agent:get-before-handoff",
+            "method": "agent.get",
+            "params": {"target": pane_id}
+        }),
+    );
+    let changed_at_before_handoff = before_handoff["result"]["agent"]["state_changed_at_unix_ms"]
+        .as_u64()
+        .unwrap_or_else(|| {
+            panic!("reported state records a transition timestamp: {before_handoff}")
+        });
 
     assert_ok(request(
         &api_socket,
@@ -1454,6 +1467,26 @@ fn live_handoff_keeps_unmanaged_agent_name_bound_to_saved_session() {
     ));
     drop(spawned);
     wait_for_api(&api_socket, Duration::from_secs(10));
+
+    // 핸드오프는 상태와 전이 시각을 함께 넘기므로 경과시간이 새 서버에서 이어진다.
+    let after_handoff = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:agent:get-after-handoff",
+            "method": "agent.get",
+            "params": {"target": pane_id}
+        }),
+    );
+    assert_eq!(
+        after_handoff["result"]["agent"]["state_changed_at_unix_ms"].as_u64(),
+        Some(changed_at_before_handoff),
+        "state transition timestamp should survive live handoff: {after_handoff}"
+    );
+    assert_eq!(
+        after_handoff["result"]["agent"]["agent_status"].as_str(),
+        before_handoff["result"]["agent"]["agent_status"].as_str(),
+        "agent status should survive live handoff: {after_handoff}"
+    );
 
     assert_ok(request(
         &api_socket,
