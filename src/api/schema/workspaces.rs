@@ -73,6 +73,18 @@ pub struct WorkspaceInfo {
     pub tokens: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<WorkspaceWorktreeInfo>,
+    /// Current git branch of the workspace cwd, from Herdr's periodic git refresh cache.
+    /// Absent when the cwd is not a git repository, HEAD is detached, or the value is
+    /// not computed yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_branch: Option<String>,
+    /// Commits the current branch is ahead of its upstream. Present together with
+    /// `git_behind`; both are absent when there is no upstream or nothing is cached yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_ahead: Option<usize>,
+    /// Commits the current branch is behind its upstream. See `git_ahead`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_behind: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

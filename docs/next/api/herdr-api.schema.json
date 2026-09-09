@@ -1088,6 +1088,31 @@
             "focused": {
               "type": "boolean"
             },
+            "git_ahead": {
+              "description": "Commits the current branch is ahead of its upstream. Present together with\n`git_behind`; both are absent when there is no upstream or nothing is cached yet.",
+              "format": "uint",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "git_behind": {
+              "description": "Commits the current branch is behind its upstream. See `git_ahead`.",
+              "format": "uint",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "git_branch": {
+              "description": "Current git branch of the workspace cwd, from Herdr's periodic git refresh cache.\nAbsent when the cwd is not a git repository, HEAD is detached, or the value is\nnot computed yet.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "label": {
               "type": "string"
             },
@@ -10710,6 +10735,31 @@
             },
             "focused": {
               "type": "boolean"
+            },
+            "git_ahead": {
+              "description": "Commits the current branch is ahead of its upstream. Present together with\n`git_behind`; both are absent when there is no upstream or nothing is cached yet.",
+              "format": "uint",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "git_behind": {
+              "description": "Commits the current branch is behind its upstream. See `git_ahead`.",
+              "format": "uint",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "git_branch": {
+              "description": "Current git branch of the workspace cwd, from Herdr's periodic git refresh cache.\nAbsent when the cwd is not a git repository, HEAD is detached, or the value is\nnot computed yet.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "label": {
               "type": "string"

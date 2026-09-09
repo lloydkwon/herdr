@@ -379,6 +379,11 @@ impl App {
     pub(super) fn workspace_info(&self, index: usize) -> crate::api::schema::WorkspaceInfo {
         let ws = &self.state.workspaces[index];
         let (agg_state, seen) = ws.aggregate_state(&self.state.terminals);
+        // git 값은 주기 갱신 캐시를 읽기만 한다. 여기서 git 을 부르면 workspace.list 가
+        // 저장소 수만큼 프로세스를 띄우게 된다. ahead/behind 는 항상 같이 있거나 같이 없다.
+        let (git_ahead, git_behind) = ws
+            .git_ahead_behind()
+            .map_or((None, None), |(ahead, behind)| (Some(ahead), Some(behind)));
         crate::api::schema::WorkspaceInfo {
             workspace_id: self.public_workspace_id(index),
             number: index + 1,
@@ -400,6 +405,9 @@ impl App {
                     checkout_path: space.checkout_path.display().to_string(),
                     is_linked_worktree: space.is_linked_worktree,
                 }),
+            git_branch: ws.branch(),
+            git_ahead,
+            git_behind,
         }
     }
 }

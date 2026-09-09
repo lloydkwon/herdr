@@ -115,6 +115,8 @@ Raw socket method names use dot notation:
 
 `workspace.move_block` atomically moves the ordered `workspace_ids` before `before_workspace_id`; omit the anchor to move the block to the end. The ids must be unique and the anchor cannot be part of the block. The response contains the authoritative ordered workspace list.
 
+`WorkspaceInfo` (returned by `workspace.list`, `workspace.get`, and the workspace mutation methods) exposes optional `git_branch`, `git_ahead`, and `git_behind` fields read from the same periodic git refresh cache that drives the sidebar; no git command runs per request. `git_branch` is absent when the workspace cwd is not a git repository or HEAD is detached. `git_ahead` and `git_behind` are always present together and absent together: `0`/`0` means the branch is in sync with its upstream, while absence means there is no upstream or the value has not been computed yet, for example when the Space sidebar layout has no `git_status` token.
+
 `session.snapshot` returns a one-time bootstrap snapshot for clients that keep
 their own local runtime cache. The response includes version/protocol metadata,
 focused workspace/tab/pane ids, workspace records, tab records, pane records,

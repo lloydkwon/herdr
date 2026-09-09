@@ -1040,6 +1040,51 @@ mod tests {
     }
 
     #[test]
+    fn workspace_info_exposes_cached_git_branch_and_ahead_behind() {
+        let mut app = test_app();
+        app.state.workspaces.push(Workspace::test_new("one"));
+        app.state.workspaces[0].cached_git_branch = Some("feature/api".into());
+        app.state.workspaces[0].cached_git_ahead_behind = Some((3, 1));
+
+        let info = app.workspace_info(0);
+
+        assert_eq!(info.git_branch.as_deref(), Some("feature/api"));
+        assert_eq!(info.git_ahead, Some(3));
+        assert_eq!(info.git_behind, Some(1));
+    }
+
+    #[test]
+    fn workspace_info_omits_git_fields_when_nothing_is_cached() {
+        let mut app = test_app();
+        app.state.workspaces.push(Workspace::test_new("plain"));
+        app.state.workspaces[0].cached_git_branch = None;
+        app.state.workspaces[0].cached_git_ahead_behind = None;
+
+        let info = app.workspace_info(0);
+        let json = serde_json::to_value(&info).unwrap();
+
+        // git 저장소가 아니면 null 이 아니라 키 자체가 없어야 한다.
+        assert!(json.get("git_branch").is_none(), "{json}");
+        assert!(json.get("git_ahead").is_none(), "{json}");
+        assert!(json.get("git_behind").is_none(), "{json}");
+    }
+
+    #[test]
+    fn workspace_info_keeps_zero_ahead_behind_distinct_from_absent() {
+        let mut app = test_app();
+        app.state.workspaces.push(Workspace::test_new("synced"));
+        app.state.workspaces[0].cached_git_branch = Some("main".into());
+        app.state.workspaces[0].cached_git_ahead_behind = Some((0, 0));
+
+        let json = serde_json::to_value(app.workspace_info(0)).unwrap();
+
+        // upstream 과 동기화된 상태는 0 이 그대로 실려야 한다 (없음으로 접히면 안 된다).
+        assert_eq!(json["git_ahead"], 0);
+        assert_eq!(json["git_behind"], 0);
+        assert_eq!(json["git_branch"], "main");
+    }
+
+    #[test]
     fn unchanged_git_status_event_has_no_render_impact() {
         let mut app = test_app();
         app.git_refresh_in_flight = true;
