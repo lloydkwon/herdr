@@ -1531,6 +1531,172 @@ fn live_handoff_keeps_unmanaged_agent_name_bound_to_saved_session() {
 }
 
 #[test]
+fn live_handoff_keeps_working_state_and_transition_time_across_hook_rereport() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let session_path = base.join("session.jsonl");
+    let started_marker = base.join("agent-started");
+    let fake_pi = base.join("pi");
+    fs::create_dir_all(&base).unwrap();
+    fs::write(
+        &fake_pi,
+        format!(
+            "#!/bin/sh\nexport HERDR_AGENT=pi\necho started > {}\nexec /bin/sleep 30\n",
+            started_marker.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&fake_pi, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    register_runtime_dir(&runtime_dir);
+    let created = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:workspace:create",
+            "method": "workspace.create",
+            "params": {"cwd": "/tmp", "focus": true}
+        }),
+    );
+    let pane_id = created["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:pane:start-agent",
+            "method": "pane.send_input",
+            "params": {"pane_id": pane_id, "text": fake_pi, "keys": ["Enter"]}
+        }),
+    ));
+    support::wait_for_file(&started_marker, Duration::from_secs(5));
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:agent:session",
+            "method": "pane.report_agent_session",
+            "params": {
+                "pane_id": pane_id,
+                "source": "herdr:pi",
+                "agent": "pi",
+                "seq": 1,
+                "agent_session_path": session_path,
+                "session_start_source": "startup"
+            }
+        }),
+    ));
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:agent:report-working",
+            "method": "pane.report_agent",
+            "params": {
+                "pane_id": pane_id,
+                "source": "herdr:pi",
+                "agent": "pi",
+                "state": "working",
+                "seq": 2,
+                "agent_session_path": session_path
+            }
+        }),
+    ));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let before_handoff = loop {
+        let response = request(
+            &api_socket,
+            serde_json::json!({
+                "id": "test:agent:get-before-handoff",
+                "method": "agent.get",
+                "params": {"target": pane_id}
+            }),
+        );
+        if response["result"]["agent"]["agent_status"].as_str() == Some("working") {
+            break response;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "agent did not reach working before handoff: {response}"
+        );
+        thread::sleep(Duration::from_millis(25));
+    };
+    let changed_at_before_handoff = before_handoff["result"]["agent"]["state_changed_at_unix_ms"]
+        .as_u64()
+        .unwrap_or_else(|| {
+            panic!("working report records a transition timestamp: {before_handoff}")
+        });
+
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
+    ));
+    drop(spawned);
+    wait_for_api(&api_socket, Duration::from_secs(10));
+
+    // 핸드오프 직후: 프로세스 재감지가 있어도 working 과 전이 시각이 그대로다.
+    let after_handoff = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:agent:get-after-handoff",
+            "method": "agent.get",
+            "params": {"target": pane_id}
+        }),
+    );
+    assert_eq!(
+        after_handoff["result"]["agent"]["agent_status"].as_str(),
+        Some("working"),
+        "working state should survive live handoff: {after_handoff}"
+    );
+    assert_eq!(
+        after_handoff["result"]["agent"]["state_changed_at_unix_ms"].as_u64(),
+        Some(changed_at_before_handoff),
+        "transition timestamp should survive live handoff: {after_handoff}"
+    );
+
+    // 같은 상태를 훅이 다시 보고해도 전이가 아니므로 시각이 유지된다.
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:agent:rereport-working",
+            "method": "pane.report_agent",
+            "params": {
+                "pane_id": pane_id,
+                "source": "herdr:pi",
+                "agent": "pi",
+                "state": "working",
+                "seq": 3,
+                "agent_session_path": session_path
+            }
+        }),
+    ));
+    let after_rereport = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:agent:get-after-rereport",
+            "method": "agent.get",
+            "params": {"target": pane_id}
+        }),
+    );
+    assert_eq!(
+        after_rereport["result"]["agent"]["state_changed_at_unix_ms"].as_u64(),
+        Some(changed_at_before_handoff),
+        "same-state hook re-report must not reset the timestamp: {after_rereport}"
+    );
+
+    let _ = request(
+        &api_socket,
+        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+    );
+    cleanup_test_base(&base);
+}
+
+#[test]
 fn live_handoff_keeps_agent_started_pane_after_agent_exits() {
     use std::os::unix::fs::PermissionsExt;
 

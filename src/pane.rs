@@ -1884,6 +1884,8 @@ impl PaneRuntime {
             // 에이전트 상태는 런타임이 아니라 TerminalState 가 알고 있어 내보내는 쪽에서 채운다.
             agent_state: None,
             agent_state_changed_at_unix_ms: None,
+            detected_agent: None,
+            agent_hook_authority: None,
         }
     }
 
@@ -2097,6 +2099,8 @@ impl PaneRuntime {
             // 에이전트 상태는 persist::restore 가 TerminalState 에 복원한다.
             agent_state: _,
             agent_state_changed_at_unix_ms: _,
+            detected_agent: _,
+            agent_hook_authority: _,
         } = state;
         let pane_id = PaneId::from_raw(pane_id);
         use std::os::fd::FromRawFd;

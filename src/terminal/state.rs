@@ -24,6 +24,15 @@ pub struct HookAuthority {
     pub session_ref: Option<crate::agent_resume::AgentSessionRef>,
 }
 
+/// 핸드오프로 넘어온 에이전트 상태를 `TerminalState` 에 되돌릴 때 쓰는 묶음.
+#[derive(Debug, Clone)]
+pub struct HandoffAgentRestore {
+    pub detected_agent: Option<Agent>,
+    pub state: AgentState,
+    pub hook_authority: Option<HookAuthority>,
+    pub changed_at_unix_ms: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SuppressedFullLifecycleHookReport {
     agent_label: String,
@@ -187,6 +196,40 @@ impl TerminalState {
             agent_process_acquisition_pending: false,
             pending_agent_resume_plan: None,
         }
+    }
+
+    /// 핸드오프로 넘어온 에이전트 상태·훅 권한·전이 시각을 그대로 복원한다.
+    ///
+    /// 가져온 직후 런타임이 같은 에이전트 프로세스를 다시 감지하면 fallback 이 `Unknown` 으로
+    /// 내려간다. 훅 권한을 함께 복원해 두면 유효 상태는 훅 상태를 유지하므로 전이가 생기지
+    /// 않고 전이 시각도 살아남는다. 상태 전이가 아니므로 seq 는 건드리지 않는다.
+    pub fn restore_handoff_agent_state(&mut self, restore: HandoffAgentRestore, now: Instant) {
+        let hook_agent = restore
+            .hook_authority
+            .as_ref()
+            .and_then(|authority| crate::detect::parse_agent_label(&authority.agent_label));
+        self.detected_agent = restore.detected_agent.or(hook_agent);
+        self.fallback_state = restore.state;
+        self.fallback_visible_blocker = false;
+        self.fallback_observed_at = Some(now);
+        if let Some(authority) = restore.hook_authority {
+            self.reconcile_agent_name_owner(&authority.agent_label, authority.session_ref.as_ref());
+            if authority.session_ref.is_some() {
+                // 훅 보고를 받을 때와 같이 훅의 세션 참조가 저장된 세션을 대신한다.
+                self.persisted_agent_session = None;
+            }
+            self.hook_authority = Some(authority);
+        } else if let Some(agent) = self.detected_agent {
+            self.reconcile_agent_name_owner(crate::detect::agent_label(agent), None);
+        }
+        let state = self
+            .hook_authority
+            .as_ref()
+            .filter(|authority| self.hook_authority_is_effective(authority))
+            .map(|authority| authority.state)
+            .unwrap_or(self.fallback_state);
+        self.state = state;
+        self.last_agent_state_changed_at_unix_ms = restore.changed_at_unix_ms;
     }
 
     pub fn set_detected_agent_process_at(
@@ -5765,6 +5808,90 @@ mod tests {
         assert!(terminal.persisted_agent_session.is_none());
         assert!(!terminal.respawn_shell_on_exit);
         assert!(!terminal.finish_agent_process_acquisition());
+    }
+
+    #[test]
+    fn restored_handoff_hook_authority_survives_process_redetection() {
+        let mut terminal = test_terminal();
+        let now = Instant::now();
+        terminal.restore_handoff_agent_state(
+            HandoffAgentRestore {
+                detected_agent: Some(Agent::Claude),
+                state: AgentState::Working,
+                hook_authority: Some(HookAuthority {
+                    source: "herdr:claude".into(),
+                    agent_label: "claude".into(),
+                    state: AgentState::Working,
+                    message: None,
+                    reported_at: now - std::time::Duration::from_secs(5),
+                    session_ref: crate::agent_resume::AgentSessionRef::id(
+                        "c20cd52f-c488-47fe-85ee-b1ef1c85cca3",
+                    ),
+                }),
+                changed_at_unix_ms: Some(1_000),
+            },
+            now,
+        );
+        assert_eq!(terminal.state, AgentState::Working);
+        assert_eq!(terminal.effective_agent_label(), Some("claude"));
+        assert_eq!(terminal.last_agent_state_changed_at_unix_ms, Some(1_000));
+
+        // 핸드오프 직후 런타임의 프로세스 재감지는 전이가 아니어야 한다.
+        let mutation = terminal
+            .set_detected_agent_process_at(Agent::Claude, now + std::time::Duration::from_secs(1));
+        assert!(mutation.effective_state_change.is_none());
+        assert_eq!(terminal.state, AgentState::Working);
+        assert_eq!(terminal.last_agent_state_changed_at_unix_ms, Some(1_000));
+
+        // 같은 상태의 훅 재보고도 전이가 아니다.
+        let mutation = terminal.set_hook_authority_at(
+            "herdr:claude".into(),
+            "claude".into(),
+            AgentState::Working,
+            None,
+            None,
+            Some(7),
+            now + std::time::Duration::from_secs(2),
+        );
+        assert!(mutation.and_then(|m| m.effective_state_change).is_none());
+
+        // 다른 상태 보고는 여전히 전이다.
+        let mutation = terminal.set_hook_authority_at(
+            "herdr:claude".into(),
+            "claude".into(),
+            AgentState::Idle,
+            None,
+            None,
+            Some(8),
+            now + std::time::Duration::from_secs(3),
+        );
+        assert_eq!(
+            mutation
+                .and_then(|m| m.effective_state_change)
+                .map(|change| change.state),
+            Some(AgentState::Idle)
+        );
+    }
+
+    #[test]
+    fn restored_handoff_state_without_hook_uses_fallback_and_detected_agent() {
+        let mut terminal = test_terminal();
+        let now = Instant::now();
+        terminal.restore_handoff_agent_state(
+            HandoffAgentRestore {
+                detected_agent: Some(Agent::Codex),
+                state: AgentState::Idle,
+                hook_authority: None,
+                changed_at_unix_ms: Some(42),
+            },
+            now,
+        );
+
+        assert_eq!(terminal.state, AgentState::Idle);
+        assert_eq!(terminal.detected_agent, Some(Agent::Codex));
+        assert_eq!(terminal.effective_agent_label(), Some("codex"));
+        assert_eq!(terminal.last_agent_state_changed_at_unix_ms, Some(42));
+        assert!(terminal.hook_authority.is_none());
     }
 
     #[test]
