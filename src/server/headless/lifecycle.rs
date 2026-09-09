@@ -93,11 +93,7 @@ impl HeadlessServer {
                 handoff_runtime.initial_history_ansi = runtime.handoff_history_ansi();
             }
             if let Some(terminal) = self.app.state.terminals.get(terminal_id) {
-                handoff_runtime.agent_state =
-                    crate::handoff_runtime::HandoffRuntimeState::agent_state_label(terminal.state)
-                        .map(str::to_owned);
-                handoff_runtime.agent_state_changed_at_unix_ms =
-                    terminal.last_agent_state_changed_at_unix_ms;
+                handoff_runtime.record_agent_state(terminal, std::time::Instant::now());
             }
             handoff_entries.push((terminal_id.clone(), handoff_runtime));
         }
