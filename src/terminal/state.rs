@@ -158,6 +158,9 @@ pub struct TerminalState {
     pub respawn_shell_on_exit: bool,
     recent_agent_process_exit: Option<RecentAgentProcessExit>,
     agent_process_acquisition_pending: bool,
+    /// 핸드오프로 복원한 에이전트. 가져온 직후 런타임이 같은 프로세스를 다시 감지할 때 한 번은
+    /// fallback 상태를 건드리지 않게 하고 소비된다(훅 권한이 없는 화면 감지 에이전트용).
+    handoff_restored_process_agent: Option<Agent>,
     pub pending_agent_resume_plan: Option<crate::agent_resume::AgentResumePlan>,
 }
 
@@ -194,6 +197,7 @@ impl TerminalState {
             respawn_shell_on_exit: false,
             recent_agent_process_exit: None,
             agent_process_acquisition_pending: false,
+            handoff_restored_process_agent: None,
             pending_agent_resume_plan: None,
         }
     }
@@ -230,6 +234,7 @@ impl TerminalState {
             .unwrap_or(self.fallback_state);
         self.state = state;
         self.last_agent_state_changed_at_unix_ms = restore.changed_at_unix_ms;
+        self.handoff_restored_process_agent = self.detected_agent;
     }
 
     pub fn set_detected_agent_process_at(
@@ -237,6 +242,28 @@ impl TerminalState {
         agent: Agent,
         now: Instant,
     ) -> TerminalStateMutation {
+        if self.handoff_restored_process_agent.take() == Some(agent)
+            && self.detected_agent == Some(agent)
+        {
+            // 핸드오프로 넘어온 pane 의 런타임이 같은 에이전트 프로세스를 다시 발견한 것이다.
+            // 새 프로세스가 아니므로 fallback 을 unknown 으로 내리지 않고 복원된 상태를 유지한다.
+            let previous_agent_label = self.effective_agent_label().map(str::to_string);
+            let previous_known_agent = self.effective_known_agent();
+            let previous_state = self.state;
+            let previous_presentation =
+                self.effective_presentation_for_state_at(previous_state, now);
+            return TerminalStateMutation {
+                effective_state_change: self.recompute_effective_state(
+                    previous_agent_label,
+                    previous_known_agent,
+                    previous_state,
+                    previous_presentation,
+                    now,
+                ),
+                session_ref_changed: false,
+                agent_released: false,
+            };
+        }
         let starts_acquisition = !self
             .should_ignore_detected_state_under_full_lifecycle_hook(Some(agent), false)
             && !self.detected_state_observed_before_release_suppression(Some(agent), now);
@@ -445,6 +472,7 @@ impl TerminalState {
         self.fallback_visible_blocker = visible_blocker && fallback_state == AgentState::Blocked;
         self.fallback_observed_at = Some(now);
         if process_exited {
+            self.handoff_restored_process_agent = None;
             if let Some(agent) = agent {
                 self.recent_agent_process_exit = Some(RecentAgentProcessExit {
                     agent,
@@ -2141,6 +2169,7 @@ impl TerminalState {
         self.respawn_shell_on_exit = false;
         self.recent_agent_process_exit = None;
         self.agent_process_acquisition_pending = false;
+        self.handoff_restored_process_agent = None;
         self.pending_agent_resume_plan = None;
         self.clear_agent_name();
     }
@@ -6048,6 +6077,33 @@ mod tests {
         assert_eq!(terminal.effective_agent_label(), Some("codex"));
         assert_eq!(terminal.last_agent_state_changed_at_unix_ms, Some(42));
         assert!(terminal.hook_authority.is_none());
+
+        // 가져온 직후 런타임이 같은 프로세스를 다시 감지해도 (훅 권한 없이) 전이가 아니다.
+        let mutation = terminal
+            .set_detected_agent_process_at(Agent::Codex, now + std::time::Duration::from_secs(1));
+        assert!(mutation.effective_state_change.is_none());
+        assert_eq!(terminal.state, AgentState::Idle);
+        assert_eq!(terminal.last_agent_state_changed_at_unix_ms, Some(42));
+
+        // 같은 화면 상태 보고도 전이가 아니다.
+        let mutation = terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Codex),
+            AgentState::Idle,
+            false,
+            false,
+            false,
+            false,
+            now + std::time::Duration::from_secs(2),
+        );
+        assert!(mutation.effective_state_change.is_none());
+
+        // 마커는 한 번만 소비된다: 이후의 프로세스 재감지는 기존대로 unknown 으로 내려간다.
+        let mutation = terminal
+            .set_detected_agent_process_at(Agent::Codex, now + std::time::Duration::from_secs(3));
+        assert_eq!(
+            mutation.effective_state_change.map(|change| change.state),
+            Some(AgentState::Unknown)
+        );
     }
 
     #[test]
