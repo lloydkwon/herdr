@@ -222,6 +222,13 @@ pub(super) fn do_handshake(
         None,
         "failed to clear client handshake read timeout",
     )?;
+    // 핸드오프 창에 있는 서버는 welcome 대신 ServerShutdown 을 보낸다. 이를 프로토콜 오류로
+    // 취급하면 supervisor 가 attention 상태로 멈춰 재접속이 끊기므로 사유를 그대로 올린다.
+    if let ServerMessage::ServerShutdown { reason } = &welcome {
+        return Err(ClientError::ServerShutdown {
+            reason: reason.clone(),
+        });
+    }
 
     if endpoint_shell {
         let ServerMessage::EndpointControl { kind, data } = welcome else {

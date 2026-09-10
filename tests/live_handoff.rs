@@ -1769,6 +1769,163 @@ fn live_handoff_keeps_working_state_and_transition_time_across_hook_rereport() {
     cleanup_test_base(&base);
 }
 
+/// PTY 안에 실제 TUI 클라이언트를 띄우고, 화면 출력을 백그라운드 스레드로 계속 모은다.
+fn spawn_client_shell(
+    config_home: &Path,
+    runtime_dir: &Path,
+    api_socket: &Path,
+) -> (SpawnedHerdr, std::sync::Arc<Mutex<String>>) {
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 40,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    cmd.env("HERDR_DISABLE_SOUND", "1");
+    cmd.env("XDG_STATE_HOME", runtime_dir.join("state"));
+    cmd.env("XDG_CONFIG_HOME", config_home);
+    cmd.env("XDG_RUNTIME_DIR", runtime_dir);
+    cmd.env("HERDR_SOCKET_PATH", api_socket);
+    cmd.env(
+        "HERDR_CLIENT_SOCKET_PATH",
+        runtime_dir.join("herdr-client.sock"),
+    );
+    cmd.env("SHELL", "/bin/sh");
+    cmd.env("TERM", "xterm-256color");
+    cmd.env_remove("HERDR_ENV");
+    let child = pair.slave.spawn_command(cmd).unwrap();
+    register_spawned_herdr_pid(child.process_id());
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().unwrap();
+    let output = std::sync::Arc::new(Mutex::new(String::new()));
+    let sink = output.clone();
+    thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => sink
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push_str(&String::from_utf8_lossy(&buf[..n])),
+            }
+        }
+    });
+    (
+        SpawnedHerdr {
+            _master: pair.master,
+            child,
+        },
+        output,
+    )
+}
+
+fn client_output(output: &std::sync::Arc<Mutex<String>>) -> String {
+    output
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+fn create_labeled_workspace(api_socket: &Path, label: &str) {
+    let created = request(
+        api_socket,
+        serde_json::json!({
+            "id": "test:workspace:create",
+            "method": "workspace.create",
+            "params": {"cwd": "/tmp", "focus": true}
+        }),
+    );
+    let workspace_id = created["result"]["workspace"]["workspace_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("workspace.create response: {created}"))
+        .to_string();
+    assert_ok(request(
+        api_socket,
+        serde_json::json!({
+            "id": "test:workspace:rename",
+            "method": "workspace.rename",
+            "params": {"workspace_id": workspace_id, "label": label}
+        }),
+    ));
+}
+
+#[test]
+fn live_handoff_keeps_attached_client_shell_connected() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    register_runtime_dir(&runtime_dir);
+    create_labeled_workspace(&api_socket, "before-handoff");
+
+    let (mut client, output) = spawn_client_shell(&config_home, &runtime_dir, &api_socket);
+    assert!(
+        support::wait_until(Duration::from_secs(15), Duration::from_millis(50), || {
+            client_output(&output).contains("before-handoff")
+        }),
+        "client shell did not render the sidebar: {}",
+        client_output(&output)
+    );
+
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
+    ));
+    drop(spawned);
+    wait_for_api(&api_socket, Duration::from_secs(10));
+
+    // 핸드오프 뒤 같은 클라이언트 프로세스가 교체 서버에 다시 붙어 새 상태를 그려야 한다.
+    create_labeled_workspace(&api_socket, "after-handoff");
+    assert!(
+        support::wait_until(Duration::from_secs(20), Duration::from_millis(100), || {
+            client_output(&output).contains("after-handoff")
+        }),
+        "client shell did not reconnect after live handoff: {}",
+        client_output(&output)
+    );
+    assert!(
+        client.child.try_wait().unwrap().is_none(),
+        "client shell exited during live handoff: {}",
+        client_output(&output)
+    );
+
+    // 핸드오프가 아닌 종료는 기존처럼 클라이언트를 끝낸다.
+    let _ = request(
+        &api_socket,
+        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = client.child.try_wait().unwrap() {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "client shell did not exit after server.stop: {}",
+            client_output(&output)
+        );
+        thread::sleep(Duration::from_millis(50));
+    };
+    assert!(
+        !status.success(),
+        "client shell should exit non-zero after server.stop"
+    );
+    assert!(
+        client_output(&output).contains("server shut down"),
+        "client shell should report the shutdown: {}",
+        client_output(&output)
+    );
+    cleanup_test_base(&base);
+}
+
 #[test]
 fn live_handoff_keeps_agent_started_pane_after_agent_exits() {
     use std::os::unix::fs::PermissionsExt;

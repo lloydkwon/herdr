@@ -34,6 +34,30 @@ pub const MAX_CLIPBOARD_IMAGE_PAYLOAD: usize = 16 * 1024 * 1024;
 /// Length of the u32 little-endian length prefix in bytes.
 const LENGTH_PREFIX_BYTES: usize = 4;
 
+/// 클라이언트가 detach 를 요청했을 때 `ServerMessage::ServerShutdown` 에 실리는 사유.
+pub const SERVER_SHUTDOWN_REASON_DETACHED: &str = "detached";
+
+/// live handoff 로 서버가 교체되는 동안 `ServerMessage::ServerShutdown` 에 실리는 사유.
+/// 같은 소켓이 교체 서버 아래에서 다시 열리므로 클라이언트는 종료하지 않고 재접속할 수 있다.
+pub const SERVER_SHUTDOWN_REASON_LIVE_HANDOFF: &str =
+    "live update in progress; reconnect after handoff completes";
+
+/// `ServerMessage::ServerShutdown` 사유의 의미 분류. 와이어 형태는 그대로 문자열이다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerShutdownReasonKind {
+    Detached,
+    LiveHandoff,
+    Other,
+}
+
+pub fn server_shutdown_reason_kind(reason: Option<&str>) -> ServerShutdownReasonKind {
+    match reason {
+        Some(SERVER_SHUTDOWN_REASON_DETACHED) => ServerShutdownReasonKind::Detached,
+        Some(SERVER_SHUTDOWN_REASON_LIVE_HANDOFF) => ServerShutdownReasonKind::LiveHandoff,
+        _ => ServerShutdownReasonKind::Other,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Client → Server messages
 // ---------------------------------------------------------------------------
@@ -1733,6 +1757,26 @@ mod tests {
     // requires a new named codec; do not update a v1 digest to bless a wire change.
     // They do not detect appended enum variants, so every type reachable from a v1
     // payload is also append-closed.
+
+    #[test]
+    fn server_shutdown_reason_classification() {
+        assert_eq!(
+            server_shutdown_reason_kind(None),
+            ServerShutdownReasonKind::Other
+        );
+        assert_eq!(
+            server_shutdown_reason_kind(Some(SERVER_SHUTDOWN_REASON_DETACHED)),
+            ServerShutdownReasonKind::Detached
+        );
+        assert_eq!(
+            server_shutdown_reason_kind(Some(SERVER_SHUTDOWN_REASON_LIVE_HANDOFF)),
+            ServerShutdownReasonKind::LiveHandoff
+        );
+        assert_eq!(
+            server_shutdown_reason_kind(Some("server is shutting down")),
+            ServerShutdownReasonKind::Other
+        );
+    }
 
     // ---- Round-trip: ClientMessage ----
 

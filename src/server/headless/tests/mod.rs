@@ -96,6 +96,7 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
         #[cfg(unix)]
         pending_handoff_repaint_nudge: false,
         should_quit,
+        quit_signal_received: false,
         server_event_rx,
         server_event_tx,
     }

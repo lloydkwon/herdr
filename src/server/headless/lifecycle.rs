@@ -301,7 +301,16 @@ impl HeadlessServer {
         if self.shutting_down {
             return;
         }
-        info!("server shutdown initiated");
+        // 어디서 종료가 시작됐는지 남긴다. 사용자가 `herdr server stop` 을 친 것과
+        // 시그널·앱 내부 종료를 로그만으로 구분할 수 있어야 한다.
+        let trigger = if self.quit_signal_received {
+            "signal"
+        } else if self.app.state.should_quit {
+            "app"
+        } else {
+            "api"
+        };
+        info!(trigger, "server shutdown initiated");
         self.shutting_down = true;
 
         // Clear client-local host graphics, then send ServerShutdown to all connected clients.

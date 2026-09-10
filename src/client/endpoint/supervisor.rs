@@ -480,6 +480,31 @@ mod tests {
     }
 
     #[test]
+    fn handoff_shutdown_during_handshake_retries_instead_of_needing_attention() {
+        let error = handshake_error(crate::client::ClientError::ServerShutdown {
+            reason: Some(crate::protocol::SERVER_SHUTDOWN_REASON_LIVE_HANDOFF.into()),
+        });
+        assert_eq!(error.kind(), std::io::ErrorKind::ConnectionAborted);
+        assert!(!failure_needs_attention(&error));
+    }
+
+    #[test]
+    fn late_registered_local_supervisor_retries_after_handoff_disconnect() {
+        // 비연합 클라이언트는 핸드오프 시점에야 Local supervisor 를 등록한다.
+        let now = Instant::now();
+        let mut supervisors = EndpointSupervisors::new(&[], now);
+        supervisors.add_local(PathBuf::from("local.sock"), Some(7), now);
+        assert!(supervisors.endpoints[&ClientEndpointId::Local]
+            .next_attempt
+            .is_none());
+        assert!(supervisors.disconnected(&ClientEndpointId::Local, 7, now));
+        assert_eq!(
+            supervisors.endpoints[&ClientEndpointId::Local].next_attempt,
+            Some(now + INITIAL_RETRY_DELAY)
+        );
+    }
+
+    #[test]
     fn handshake_network_failures_retry_but_incompatibility_needs_attention() {
         let timeout = handshake_error(crate::client::ClientError::ConnectionLost(
             std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out"),

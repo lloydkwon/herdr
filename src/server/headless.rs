@@ -250,6 +250,8 @@ pub struct HeadlessServer {
     pending_handoff_repaint_nudge: bool,
     /// Flag set by Ctrl+C or `server stop` signal.
     should_quit: Arc<AtomicBool>,
+    /// 종료 시그널(SIGINT/SIGTERM/SIGHUP)이 도착했는지. 종료 로그의 트리거 판별용.
+    quit_signal_received: bool,
     /// Channel for receiving server events from client connection threads.
     server_event_rx: mpsc::Receiver<ServerEvent>,
     /// Sender for server events (cloned for each client thread).
@@ -377,6 +379,7 @@ impl HeadlessServer {
             #[cfg(unix)]
             pending_handoff_repaint_nudge: false,
             should_quit,
+            quit_signal_received: false,
             server_event_rx,
             server_event_tx,
         })
@@ -1745,7 +1748,7 @@ impl HeadlessServer {
             self.send_to_client(
                 client_id,
                 ServerMessage::ServerShutdown {
-                    reason: Some("detached".to_owned()),
+                    reason: Some(crate::protocol::SERVER_SHUTDOWN_REASON_DETACHED.to_owned()),
                 },
             );
         }
@@ -1758,9 +1761,7 @@ impl HeadlessServer {
             self.send_to_client(
                 client_id,
                 ServerMessage::ServerShutdown {
-                    reason: Some(
-                        "live update in progress; reconnect after handoff completes".to_owned(),
-                    ),
+                    reason: Some(crate::protocol::SERVER_SHUTDOWN_REASON_LIVE_HANDOFF.to_owned()),
                 },
             );
             if let Some(client) = self.clients.get_mut(&client_id) {
@@ -1904,8 +1905,7 @@ impl HeadlessServer {
                     if let Ok(message) =
                         Self::frame_server_message(&ServerMessage::ServerShutdown {
                             reason: Some(
-                                "live update in progress; reconnect after handoff completes"
-                                    .to_owned(),
+                                crate::protocol::SERVER_SHUTDOWN_REASON_LIVE_HANDOFF.to_owned(),
                             ),
                         })
                     {
@@ -1952,8 +1952,7 @@ impl HeadlessServer {
                     if let Ok(message) =
                         Self::frame_server_message(&ServerMessage::ServerShutdown {
                             reason: Some(
-                                "live update in progress; reconnect after handoff completes"
-                                    .to_owned(),
+                                crate::protocol::SERVER_SHUTDOWN_REASON_LIVE_HANDOFF.to_owned(),
                             ),
                         })
                     {
@@ -2648,8 +2647,10 @@ impl HeadlessServer {
                 client.take_deferred_render() != DeferredRender::None
             }
             ServerEvent::QuitSignal => {
-                // The quit check at the top of the loop handles this.
-                // No render needed — the next iteration will initiate shutdown.
+                // 종료 자체는 루프 상단의 quit 검사가 처리한다. 여기서는 트리거만 기록해
+                // "server shutdown initiated" 로그가 시그널과 api 요청을 구분하게 한다.
+                self.quit_signal_received = true;
+                info!("termination signal received; requesting shutdown");
                 false
             }
         }

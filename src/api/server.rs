@@ -364,6 +364,7 @@ fn handle_request(
 
     if matches!(&request.method, Method::ServerStop(_)) {
         if let Some(server_stop) = server_stop {
+            info!(request_id = %request.id, "server.stop requested via api");
             server_stop.store(true, Ordering::Release);
             return serde_json::to_string(&SuccessResponse {
                 id: request.id,

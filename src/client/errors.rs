@@ -35,7 +35,7 @@ impl std::fmt::Display for ClientError {
             }
             ClientError::ServerShutdown { reason } => {
                 match reason.as_deref() {
-                    Some("detached") => {
+                    Some(crate::protocol::SERVER_SHUTDOWN_REASON_DETACHED) => {
                         if let Ok(reattach_command) =
                             std::env::var(crate::remote::REATTACH_COMMAND_ENV_VAR)
                         {

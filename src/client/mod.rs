@@ -7,7 +7,8 @@
 //! - Reads stdin events (keystrokes, mouse, paste) and sends them as ClientMessage::Input
 //! - Detects terminal resize and sends ClientMessage::Resize
 //! - Restores terminal on exit (normal or error)
-//! - Handles ServerShutdown gracefully (clean exit, informative message to stderr)
+//! - Handles ServerShutdown gracefully (clean exit, informative message to stderr);
+//!   a live-handoff shutdown keeps a single-machine shell client alive and reconnects it
 //! - Handles server unreachable (clear error screen, not blank/hang)
 //! - Forwards OSC 52 clipboard writes from server to its own stdout
 //! - Displays sound/toast notifications forwarded from server
@@ -24,6 +25,7 @@ mod endpoint_commands;
 mod errors;
 mod events;
 mod frame_output;
+mod handoff_recovery;
 mod handshake;
 mod input;
 mod loop_config;
@@ -342,7 +344,7 @@ fn run_client_with_mode(
             &err,
             ClientError::ServerShutdown {
                 reason: Some(reason)
-            } if reason == "detached"
+            } if reason == crate::protocol::SERVER_SHUTDOWN_REASON_DETACHED
         );
         let connection_lost_during_terminal_hangup =
             terminal_restore_failed && matches!(&err, ClientError::ConnectionLost(_));
@@ -576,6 +578,8 @@ async fn run_client_loop(
     }
     let mut next_surface_serial = 1_u64;
     let mut pending_activation: Option<endpoint::PendingEndpointActivation> = None;
+    // 핸드오프로 끊긴 Local 연결을 재접속으로 복구하는 동안만 Some 이다.
+    let mut local_handoff_recovery: Option<handoff_recovery::LocalHandoffRecovery> = None;
     let mut scheduled_activation = None;
     let mut pending_catalog: Option<Result<Vec<endpoint::SavedSshEndpoint>, String>> = None;
     if state.shell.is_some() && !is_remote_client && state.attach_escape.is_none() {
@@ -1164,6 +1168,16 @@ async fn run_client_loop(
                     }
                     if status == endpoint::ClientEndpointStatus::Attention {
                         warn!(endpoint = %endpoint_id.storage_key(), generation, error = %message, "endpoint needs attention");
+                        if !federated && endpoint_id.is_local() {
+                            if let Some(recovery) = local_handoff_recovery.take() {
+                                // 교체 서버가 비호환이면 30초를 기다리지 않고 바로 종료한다.
+                                let reason = recovery
+                                    .reason
+                                    .map(|reason| format!("{reason}: {message}"))
+                                    .or(Some(message));
+                                return Err(ClientError::ServerShutdown { reason });
+                            }
+                        }
                     }
                     let unavailable = state.shell.as_mut().and_then(|shell| {
                         shell.set_endpoint_status(&endpoint_id, status);
@@ -1197,6 +1211,9 @@ async fn run_client_loop(
                     let agent_view_projection_supported = negotiation.supports_capability(
                         crate::protocol::endpoint::AGENT_VIEW_PROJECTION_CAPABILITY,
                     );
+                    if endpoint_id.is_local() && local_handoff_recovery.take().is_some() {
+                        info!("reconnected to the replacement server after live handoff");
+                    }
                     let frame = state.shell.as_mut().and_then(|shell| {
                         shell.set_endpoint_methods_for(&endpoint_id, Some(negotiation.methods()));
                         shell.set_endpoint_agent_view_projection_supported(
@@ -1237,8 +1254,12 @@ async fn run_client_loop(
                 if !endpoint_catalog.select_endpoint(&endpoint_id) {
                     continue;
                 }
-                if let Err(error) = endpoint_catalog.store_selection() {
-                    warn!(%error, "failed to persist desired endpoint selection");
+                // 비연합 클라이언트는 선택을 저장할 필요가 없다(핸드오프 재접속이 selection.json 을
+                // 새로 만들지 않게 한다).
+                if federated {
+                    if let Err(error) = endpoint_catalog.store_selection() {
+                        warn!(%error, "failed to persist desired endpoint selection");
+                    }
                 }
                 begin_endpoint_activation(
                     &mut state,
@@ -1570,13 +1591,32 @@ async fn run_client_loop(
                     }
                     ServerMessage::ServerShutdown { reason } => {
                         if !federated && endpoint_id.is_local() {
-                            return Err(ClientError::ServerShutdown { reason });
+                            if handoff_recovery::local_shutdown_should_reconnect(
+                                federated,
+                                state.shell.is_some(),
+                                &endpoint_id,
+                                reason.as_deref(),
+                            ) {
+                                // 교체 서버가 같은 소켓을 다시 열 때까지 기다렸다가 붙는다.
+                                // 연합 모드가 쓰는 Local supervisor 를 이 시점에 지연 등록한다.
+                                info!(
+                                    "server is handing off; keeping the client alive to reconnect"
+                                );
+                                supervisors.add_local(client_socket_path(), Some(generation), now);
+                                local_handoff_recovery =
+                                    Some(handoff_recovery::LocalHandoffRecovery::new(
+                                        now,
+                                        reason.clone(),
+                                    ));
+                            } else {
+                                return Err(ClientError::ServerShutdown { reason });
+                            }
                         }
                         write_stream.fail(
                             &endpoint_id,
                             io::Error::new(
                                 io::ErrorKind::ConnectionAborted,
-                                reason.unwrap_or_else(|| "server stopped".into()),
+                                handoff_recovery::shutdown_disconnect_notice(reason.as_deref()),
                             ),
                         );
                     }
@@ -1992,6 +2032,18 @@ async fn run_client_loop(
             }
             ClientLoopEvent::Timer => {
                 client_timer.fired();
+                if let Some(recovery) = local_handoff_recovery.as_ref() {
+                    if recovery.expired(now)
+                        && write_stream
+                            .connection(&endpoint::ClientEndpointId::Local)
+                            .is_none()
+                    {
+                        // 교체 서버가 제때 소켓을 열지 않았다. 기존과 같은 메시지로 종료한다.
+                        return Err(ClientError::ServerShutdown {
+                            reason: recovery.reason.clone(),
+                        });
+                    }
+                }
                 #[cfg(unix)]
                 if let Ok(mut matcher) = state.direct_graphics_response.lock() {
                     matcher.expire();
@@ -2011,7 +2063,10 @@ async fn run_client_loop(
                         error = %failure.message,
                         "endpoint transport failed"
                     );
-                    if !federated && failure.endpoint_id.is_local() {
+                    if !federated
+                        && failure.endpoint_id.is_local()
+                        && local_handoff_recovery.is_none()
+                    {
                         return Err(ClientError::ConnectionLost(io::Error::new(
                             failure.kind,
                             failure.message,
