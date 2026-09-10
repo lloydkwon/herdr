@@ -228,3 +228,40 @@ release version:
 # Print default config
 default-config:
     cargo run --release --locked -- --default-config
+
+# ---------------------------------------------------------------------------
+# Fork-only recipes (lloydkwon/herdr). upstream 에는 없는 로컬 빌드·설치 워크플로.
+# 절차와 금지 사항은 FORK.md 참고.
+# ---------------------------------------------------------------------------
+
+# upstream master 를 받아 포크 커밋을 그 위로 다시 얹고 전체 검사를 돌린다
+[unix]
+fork-sync:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export ZIG="${ZIG:-$HOME/.local/zig-0.15.2/zig}"
+    git fetch origin
+    if ! git rebase origin/master; then
+        echo "error: rebase 충돌. 해결 후 'git rebase --continue' 하고 'just check' 를 직접 실행하세요 (FORK.md 참고)" >&2
+        exit 1
+    fi
+    just check
+
+# 릴리스 빌드 → 이전 바이너리 백업 → 설치 → 실행 중인 서버 live handoff
+[unix]
+fork-install:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export ZIG="${ZIG:-$HOME/.local/zig-0.15.2/zig}"
+    bin="${HERDR_INSTALL_DIR:-$HOME/.local/bin}/herdr"
+    cargo build --release --locked
+    if [ -x "$bin" ]; then cp -p "$bin" "$bin-prev.bak"; fi
+    install -m 755 target/release/herdr "$bin.new" && mv -f "$bin.new" "$bin"
+    "$bin" --version
+    if "$bin" status server --json 2>/dev/null | grep -q '"running":true'; then
+        "$bin" server live-handoff --import-exe "$bin"
+        echo "handoff 완료. 붙어 있던 클라이언트가 종료됐다면 'herdr' 만 다시 실행하세요."
+        echo "'herdr server stop' 은 실행하지 마세요. pane 프로세스가 전부 종료되고 세션이 콜드 복원됩니다."
+    else
+        echo "실행 중인 서버가 없어 handoff 를 건너뜁니다."
+    fi
