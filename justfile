@@ -239,7 +239,7 @@ default-config:
 fork-sync:
     #!/usr/bin/env bash
     set -euo pipefail
-    export ZIG="${ZIG:-$HOME/.local/zig-0.15.2/zig}"
+    export ZIG="${ZIG:-$HOME/.local/zig-0.16.0/zig}"
     git fetch origin
     if ! git rebase origin/master; then
         echo "error: rebase 충돌. 해결 후 'git rebase --continue' 하고 'just check' 를 직접 실행하세요 (FORK.md 참고)" >&2
@@ -252,7 +252,7 @@ fork-sync:
 fork-install:
     #!/usr/bin/env bash
     set -euo pipefail
-    export ZIG="${ZIG:-$HOME/.local/zig-0.15.2/zig}"
+    export ZIG="${ZIG:-$HOME/.local/zig-0.16.0/zig}"
     bin="${HERDR_INSTALL_DIR:-$HOME/.local/bin}/herdr"
     cargo build --release --locked
     if [ -x "$bin" ]; then cp -p "$bin" "$bin-prev.bak"; fi

@@ -592,6 +592,7 @@ fn muted_agent_sidebar_rows_do_not_stack_terminal_faint() {
         terminal_title_stripped: None,
         agent_status: AgentStatus::Working,
         state_change_seq: 1,
+        state_changed_at_unix_ms: None,
         state_labels: Vec::new(),
         tokens: Vec::new(),
         focused: true,

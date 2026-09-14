@@ -37,12 +37,12 @@ version_check = false
 | 도구 | 버전 | 비고 |
 | --- | --- | --- |
 | Rust | `rust-toolchain.toml` 이 고정 | rustup 만 있으면 자동으로 맞춰집니다 |
-| Zig | 0.15.2 | `build.rs` 가 벤더링된 `vendor/libghostty-vt` 를 컴파일합니다. PATH 에 없으면 `ZIG=<path>` 로 지정. 이 머신은 `~/.local/zig-0.15.2/zig` |
+| Zig | 0.16.0 | `build.rs` 가 벤더링된 `vendor/libghostty-vt` 를 컴파일합니다. PATH 에 없으면 `ZIG=<path>` 로 지정. 이 머신은 `~/.local/zig-0.16.0/zig` |
 | cargo-nextest | 최신 | `just test` / `just check` 가 사용 |
-| rustup 타깃 `x86_64-pc-windows-msvc` | | `just check` 의 `windows-lint` 가 사용 |
+| rustup 타깃 `x86_64-pc-windows-msvc` + `xwin` + Windows SDK | | `just check` 의 `windows-lint` 가 사용. `cargo install xwin --locked` 뒤 `just setup-windows-cross --accept-license` 한 번(SDK 는 `~/.local/share/herdr/windows-cross`) |
 | just, python3, bun | | 유지보수·문서 계약 테스트 |
 
-`just fork-sync` / `just fork-install` 은 `ZIG` 가 비어 있으면 `~/.local/zig-0.15.2/zig` 를 기본값으로 씁니다.
+`just fork-sync` / `just fork-install` 은 `ZIG` 가 비어 있으면 `~/.local/zig-0.16.0/zig` 를 기본값으로 씁니다.
 
 ## 리모트와 브랜치
 
