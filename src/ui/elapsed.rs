@@ -1,40 +1,53 @@
 //! 에이전트 상태 경과시간 라벨 포맷.
 //!
-//! 사이드바 폭이 좁으므로 `12초` / `3분` / `1시간 20분` 처럼 짧게 만든다.
+//! 사이드바 폭이 좁으므로 `12s` / `3m` / `1h20m` / `2d3h` 처럼 가장 짧은 형식을 쓴다.
 
 const MS_PER_SECOND: u64 = 1_000;
 const MS_PER_MINUTE: u64 = 60 * MS_PER_SECOND;
 const MS_PER_HOUR: u64 = 60 * MS_PER_MINUTE;
+const MS_PER_DAY: u64 = 24 * MS_PER_HOUR;
 
-/// 경과 밀리초를 짧은 한국어 라벨로 바꾼다.
+/// 경과 밀리초를 짧은 라벨로 바꾼다.
 ///
-/// 1분 미만은 초, 1시간 미만은 분, 그 이상은 `N시간` 뒤에 0이 아닌 분만 덧붙인다.
+/// 1분 미만은 초(`12s`), 1시간 미만은 분(`3m`), 하루 미만은 시+분(`1h20m`, 분이 0이면 `1h`),
+/// 그 이상은 일+시(`2d3h`, 시가 0이면 `2d`). 단위는 두 개까지만 붙인다.
 pub(crate) fn format_elapsed_label(elapsed_ms: u64) -> String {
     if elapsed_ms < MS_PER_MINUTE {
-        return format!("{}초", elapsed_ms / MS_PER_SECOND);
+        return format!("{}s", elapsed_ms / MS_PER_SECOND);
     }
     if elapsed_ms < MS_PER_HOUR {
-        return format!("{}분", elapsed_ms / MS_PER_MINUTE);
+        return format!("{}m", elapsed_ms / MS_PER_MINUTE);
     }
-    let hours = elapsed_ms / MS_PER_HOUR;
-    let minutes = (elapsed_ms % MS_PER_HOUR) / MS_PER_MINUTE;
-    if minutes == 0 {
-        format!("{hours}시간")
+    if elapsed_ms < MS_PER_DAY {
+        let hours = elapsed_ms / MS_PER_HOUR;
+        let minutes = (elapsed_ms % MS_PER_HOUR) / MS_PER_MINUTE;
+        return if minutes == 0 {
+            format!("{hours}h")
+        } else {
+            format!("{hours}h{minutes}m")
+        };
+    }
+    let days = elapsed_ms / MS_PER_DAY;
+    let hours = (elapsed_ms % MS_PER_DAY) / MS_PER_HOUR;
+    if hours == 0 {
+        format!("{days}d")
     } else {
-        format!("{hours}시간 {minutes}분")
+        format!("{days}d{hours}h")
     }
 }
 
 /// `changed_at_unix_ms` 이후 라벨 문자열이 다음으로 바뀌는 unix ms 시각.
 ///
-/// 1분 미만이면 다음 초 경계, 그 이상이면 다음 분 경계다. 렌더 갱신 타이머가 이 값으로
-/// 정확히 필요한 순간에만 다시 그린다.
+/// 1분 미만이면 다음 초 경계, 하루 미만이면 다음 분 경계, 그 이상은 다음 시 경계다.
+/// 렌더 갱신 타이머가 이 값으로 정확히 필요한 순간에만 다시 그린다.
 pub(crate) fn next_elapsed_label_change_unix_ms(changed_at_unix_ms: u64, now_unix_ms: u64) -> u64 {
     let elapsed = crate::clock::elapsed_ms(changed_at_unix_ms, now_unix_ms);
     let unit = if elapsed < MS_PER_MINUTE {
         MS_PER_SECOND
-    } else {
+    } else if elapsed < MS_PER_DAY {
         MS_PER_MINUTE
+    } else {
+        MS_PER_HOUR
     };
     changed_at_unix_ms.saturating_add((elapsed / unit + 1).saturating_mul(unit))
 }
@@ -45,13 +58,18 @@ mod tests {
 
     #[test]
     fn formats_seconds_minutes_and_hours() {
-        assert_eq!(format_elapsed_label(0), "0초");
-        assert_eq!(format_elapsed_label(12_500), "12초");
-        assert_eq!(format_elapsed_label(59_999), "59초");
-        assert_eq!(format_elapsed_label(60_000), "1분");
-        assert_eq!(format_elapsed_label(180_000), "3분");
-        assert_eq!(format_elapsed_label(3_600_000), "1시간");
-        assert_eq!(format_elapsed_label(4_800_000), "1시간 20분");
+        assert_eq!(format_elapsed_label(0), "0s");
+        assert_eq!(format_elapsed_label(12_500), "12s");
+        assert_eq!(format_elapsed_label(59_999), "59s");
+        assert_eq!(format_elapsed_label(60_000), "1m");
+        assert_eq!(format_elapsed_label(180_000), "3m");
+        assert_eq!(format_elapsed_label(3_600_000), "1h");
+        assert_eq!(format_elapsed_label(4_800_000), "1h20m");
+        assert_eq!(format_elapsed_label(2 * MS_PER_DAY), "2d");
+        assert_eq!(
+            format_elapsed_label(2 * MS_PER_DAY + 3 * MS_PER_HOUR + 5 * MS_PER_MINUTE),
+            "2d3h"
+        );
     }
 
     #[test]
@@ -60,6 +78,12 @@ mod tests {
         assert_eq!(next_elapsed_label_change_unix_ms(1_000, 13_400), 14_000);
         assert_eq!(next_elapsed_label_change_unix_ms(1_000, 61_000), 121_000);
         assert_eq!(next_elapsed_label_change_unix_ms(1_000, 181_500), 241_000);
+        // 하루가 넘으면 시 단위로만 바뀐다.
+        let day_and_a_bit = 1_000 + MS_PER_DAY + 30 * MS_PER_MINUTE;
+        assert_eq!(
+            next_elapsed_label_change_unix_ms(1_000, day_and_a_bit),
+            1_000 + MS_PER_DAY + MS_PER_HOUR
+        );
     }
 
     #[test]

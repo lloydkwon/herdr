@@ -1538,14 +1538,14 @@ fn agent_sidebar_shows_state_elapsed_label_and_arms_repaint_deadline() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("pi one · 3분"), "frame: {text}");
+    assert!(text.contains("pi one · 3m"), "frame: {text}");
     assert!(text.contains("pi two"), "frame: {text}");
     assert!(
         !text.contains("pi two ·"),
         "unknown timestamp must not render a label: {text}"
     );
 
-    // 3분 0.5초 경과 → 다음 라벨 변화(4분)까지 데드라인이 걸린다.
+    // 3분 0.5초 경과 → 다음 라벨 변화(4m)까지 데드라인이 걸린다.
     let deadline = state
         .state_elapsed_repaint_deadline
         .expect("elapsed label arms a repaint deadline");

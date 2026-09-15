@@ -483,7 +483,7 @@ rows = [[{ token = "$load", rules = [{ lt = 50, hide = true }] }], ["workspace"]
             agent_rows(&config, known, "working"),
             vec![vec![
                 ResolvedToken::unstyled(ResolvedTokenKind::StateIcon),
-                ResolvedToken::unstyled(ResolvedTokenKind::StateElapsed("3분".into())),
+                ResolvedToken::unstyled(ResolvedTokenKind::StateElapsed("3m".into())),
             ]]
         );
 
