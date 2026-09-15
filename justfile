@@ -260,7 +260,8 @@ fork-install:
     "$bin" --version
     if "$bin" status server --json 2>/dev/null | grep -q '"running":true'; then
         "$bin" server live-handoff --import-exe "$bin"
-        echo "handoff 완료. 붙어 있던 클라이언트가 종료됐다면 'herdr' 만 다시 실행하세요."
+        echo "handoff 완료 — 서버는 새 빌드입니다. 붙어 있던 TUI 클라이언트는 자동 재접속하지만 «옛 빌드의 클라이언트 코드»로 계속 그립니다."
+        echo "사이드바·키·화면 쪽 변경을 보려면 클라이언트를 다시 띄우세요: prefix+q (detach) 뒤 'herdr'. 세션·pane 은 그대로입니다."
         echo "'herdr server stop' 은 실행하지 마세요. pane 프로세스가 전부 종료되고 세션이 콜드 복원됩니다."
     else
         echo "실행 중인 서버가 없어 handoff 를 건너뜁니다."

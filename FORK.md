@@ -72,8 +72,9 @@ just fork-install   # cargo build --release → ~/.local/bin/herdr-prev.bak 백�
 4. `git add … && GIT_EDITOR=true git rebase --continue`, 남은 커밋도 같은 식으로 처리합니다.
 5. `just check` 가 통과하면 `git push --force-with-lease fork master`.
 
-`fork-install` 이 끝나면 붙어 있던 TUI 클라이언트는 종료됩니다. 터미널에서 `herdr` 를 다시 실행하기만 하세요.
-(핸드오프 자동 재접속이 들어간 빌드부터는 클라이언트가 그대로 새 서버에 붙습니다.)
+`fork-install` 이 끝나면 서버는 새 빌드로 바뀌고, 붙어 있던 TUI 클라이언트는 새 서버에 자동 재접속합니다. 단 그 클라이언트 프로세스는
+**옛 빌드의 코드**로 계속 그리므로, 사이드바·키·화면 쪽 변경을 보려면 `prefix+q` 로 detach 한 뒤 `herdr` 를 다시 실행합니다
+(세션·pane 은 서버에 있으므로 그대로입니다). 서버 쪽 변경(API·감지·핸드오프)은 재접속만으로 반영됩니다.
 
 ## 복구
 
