@@ -87,6 +87,12 @@ pub fn persisted_session_from_launch_args(
     })
 }
 
+/// 재개 명령(argv) 뒤에 저장된 추가 인자를 덧붙인다. dedupe 키는 세션 기준이므로 그대로 둔다.
+pub fn with_resume_args(mut plan: AgentResumePlan, args: &[String]) -> AgentResumePlan {
+    plan.argv.extend(args.iter().cloned());
+    plan
+}
+
 pub fn normalize_session_start_source(value: Option<String>) -> Option<String> {
     match value.as_deref().map(str::trim) {
         Some(
@@ -855,5 +861,36 @@ mod tests {
             &AgentSessionRef::path(&agy_session).unwrap()
         )
         .is_none());
+    }
+
+    #[test]
+    fn with_resume_args_appends_after_resume_argv_and_keeps_dedupe_key() {
+        let plan = plan(
+            "herdr:claude",
+            "claude",
+            &AgentSessionRef::id("claude-session").unwrap(),
+        )
+        .unwrap();
+        let key = plan.dedupe_key.clone();
+        let extended = with_resume_args(
+            plan,
+            &[
+                "--dangerously-skip-permissions".to_string(),
+                "--settings".to_string(),
+                "x.json".to_string(),
+            ],
+        );
+        assert_eq!(
+            extended.argv,
+            vec![
+                "claude",
+                "--resume",
+                "claude-session",
+                "--dangerously-skip-permissions",
+                "--settings",
+                "x.json"
+            ]
+        );
+        assert_eq!(extended.dedupe_key, key);
     }
 }

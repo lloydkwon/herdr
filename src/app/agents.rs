@@ -156,6 +156,7 @@ impl App {
         if params
             .args
             .iter()
+            .chain(params.resume_args.iter())
             .any(|arg| arg.chars().any(char::is_control))
         {
             return Err(AgentStartError::InvalidArgument);
@@ -222,6 +223,7 @@ impl App {
         if let Some(session) = persisted_agent_session {
             terminal.set_managed_agent_launch_session(session);
         }
+        terminal.set_agent_resume_args(params.resume_args);
         self.state.mark_session_dirty();
         self.schedule_session_save();
 
@@ -229,6 +231,63 @@ impl App {
             .agent_info(ws_idx, pane_id)
             .ok_or(AgentStartError::TargetUnavailable(params.pane_id))?;
         Ok((agent, argv))
+    }
+
+    /// 에이전트 pane 의 재개 인자를 통째로 바꾼다. 빈 목록은 지운다.
+    pub(super) fn set_agent_resume_args_target(
+        &mut self,
+        target: &str,
+        args: Vec<String>,
+    ) -> Result<crate::api::schema::AgentInfo, AgentResumeArgsError> {
+        if args.iter().any(|arg| arg.chars().any(char::is_control)) {
+            return Err(AgentResumeArgsError::InvalidArgument);
+        }
+        let resolved = self
+            .resolve_agent_target(target)
+            .map_err(AgentResumeArgsError::Target)?;
+        let Some(terminal) = self
+            .state
+            .terminals
+            .values_mut()
+            .find(|terminal| terminal.id.to_string() == resolved.terminal_id)
+        else {
+            return Err(AgentResumeArgsError::Target(
+                TerminalTargetError::NotFound {
+                    target: target.to_string(),
+                },
+            ));
+        };
+        // 기동 대기 중인 managed 에이전트도 대상이다 — 재개 인자는 기동 직후 정해 두는 값이다.
+        if terminal.managed_agent_kind().is_none() && terminal.effective_agent_label().is_none() {
+            return Err(AgentResumeArgsError::NotAgent);
+        }
+        terminal.set_agent_resume_args(args);
+        self.state.mark_session_dirty();
+        self.schedule_session_save();
+        self.emit_pane_updated(resolved.ws_idx, resolved.pane_id);
+        self.agent_info(resolved.ws_idx, resolved.pane_id)
+            .ok_or_else(|| {
+                AgentResumeArgsError::Target(TerminalTargetError::NotFound {
+                    target: target.to_string(),
+                })
+            })
+    }
+
+    pub(super) fn agent_resume_args_error_body(
+        &self,
+        err: AgentResumeArgsError,
+    ) -> crate::api::schema::ErrorBody {
+        match err {
+            AgentResumeArgsError::Target(err) => self.agent_target_error_body(err),
+            AgentResumeArgsError::NotAgent => crate::api::schema::ErrorBody {
+                code: "agent_not_found".into(),
+                message: "agent target does not currently host an agent".into(),
+            },
+            AgentResumeArgsError::InvalidArgument => crate::api::schema::ErrorBody {
+                code: "invalid_agent_argument".into(),
+                message: "resume arguments must not contain control characters".into(),
+            },
+        }
     }
 
     pub(super) fn agent_start_error_body(
@@ -396,6 +455,7 @@ impl App {
             interactive_ready: terminal.managed_agent_interactive_ready(),
             state_change_seq: terminal.last_agent_state_change_seq.unwrap_or(0),
             state_changed_at_unix_ms: terminal.last_agent_state_changed_at_unix_ms,
+            resume_args: terminal.agent_resume_args.clone(),
             cwd: pane.cwd,
             foreground_cwd: pane.foreground_cwd,
             revision: pane.revision,
@@ -470,6 +530,12 @@ pub(super) enum AgentRenameError {
         name: String,
         candidates: Vec<crate::api::schema::AgentInfo>,
     },
+}
+
+pub(super) enum AgentResumeArgsError {
+    Target(TerminalTargetError),
+    NotAgent,
+    InvalidArgument,
 }
 
 #[cfg(test)]

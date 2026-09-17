@@ -50,6 +50,14 @@ pub struct AgentRenameParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentResumeArgsSetParams {
+    pub target: String,
+    /// Replaces the stored resume arguments. Empty clears them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentViewSetParams {
     pub source: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -170,6 +178,10 @@ pub struct AgentStartParams {
     pub pane_id: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
+    /// Extra arguments appended to the native resume command when the server restores this
+    /// agent session after a restart. Stored with the session; empty means none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resume_args: Vec<String>,
     /// Startup timeout in milliseconds. Values must be greater than 3000 and at most 300000.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
@@ -221,6 +233,9 @@ pub struct AgentInfo {
     /// Wall-clock unix milliseconds of the last agent state transition. Absent when unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_changed_at_unix_ms: Option<u64>,
+    /// Extra arguments the server appends when it natively resumes this agent session.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resume_args: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

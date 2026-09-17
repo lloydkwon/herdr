@@ -496,6 +496,9 @@ fn restore_tab(
             .and_then(|pane| pane.managed_agent_kind.as_deref())
             .and_then(crate::detect::parse_canonical_agent_label);
         let saved_launch_argv = saved_pane.and_then(|p| p.launch_argv.clone());
+        let saved_resume_args = saved_pane
+            .map(|p| p.agent_resume_args.clone())
+            .unwrap_or_default();
         let saved_agent_session = saved_pane.and_then(|p| p.agent_session.as_ref());
         let saved_history =
             old_id.and_then(|old_id| history.and_then(|history| history.panes.get(old_id)));
@@ -534,9 +537,12 @@ fn restore_tab(
             startup.restore_plan.clone()
         };
         if let Some(plan) = pending_native_agent_restore {
+            // 저장된 재개 인자(권한 모드·설정 파일 등)를 재개 명령 뒤에 덧붙인다.
+            let plan = crate::agent_resume::with_resume_args(plan, &saved_resume_args);
             let terminal_id = TerminalId::alloc();
             let mut terminal = TerminalState::new(terminal_id.clone(), cwd.clone())
                 .with_pending_agent_resume_plan(plan);
+            terminal.set_agent_resume_args(saved_resume_args.clone());
             if let Some(label) = saved_label {
                 terminal.set_manual_label(label);
             }
@@ -652,6 +658,7 @@ fn restore_tab(
                 if let Some(session) = restored_agent_session {
                     terminal.set_persisted_agent_session(session);
                 }
+                terminal.set_agent_resume_args(saved_resume_args.clone());
                 match (saved_agent_name, saved_managed_agent) {
                     (Some(agent_name), Some(agent)) if was_imported => {
                         terminal.restore_managed_agent(agent_name, agent)
@@ -1214,6 +1221,7 @@ mod tests {
                                 value: "opencode-session".into(),
                             }),
                             launch_argv: None,
+                            agent_resume_args: Vec::new(),
                         },
                     )]),
                     zoomed: false,
@@ -1295,6 +1303,7 @@ mod tests {
                                 managed_agent_kind: None,
                                 agent_session: None,
                                 launch_argv: None,
+                                agent_resume_args: Vec::new(),
                             },
                         ),
                         (
@@ -1306,6 +1315,7 @@ mod tests {
                                 managed_agent_kind: None,
                                 agent_session: None,
                                 launch_argv: None,
+                                agent_resume_args: Vec::new(),
                             },
                         ),
                     ]),
@@ -1359,6 +1369,7 @@ mod tests {
                     managed_agent_kind: None,
                     agent_session: None,
                     launch_argv: None,
+                    agent_resume_args: Vec::new(),
                 },
             )
         };
@@ -1374,6 +1385,7 @@ mod tests {
                 value: "codex-session".into(),
             }),
             launch_argv: None,
+            agent_resume_args: Vec::new(),
         };
         let snapshot = SessionSnapshot {
             version: super::super::snapshot::SNAPSHOT_VERSION,
@@ -1525,6 +1537,7 @@ mod tests {
                                 value: "codex-session".into(),
                             }),
                             launch_argv: None,
+                            agent_resume_args: Vec::new(),
                         },
                     )]),
                     zoomed: false,
@@ -1595,6 +1608,112 @@ mod tests {
             handoff_runtimes.is_empty(),
             "handoff restore should not replace pending native agent resume with a shell runtime"
         );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn native_agent_restore_appends_saved_resume_args() {
+        let cwd = std::env::current_dir().unwrap();
+        let resume_args = vec![
+            "--dangerously-skip-permissions".to_string(),
+            "--settings".to_string(),
+            "exec-settings.json".to_string(),
+        ];
+        let snapshot = SessionSnapshot {
+            version: super::super::snapshot::SNAPSHOT_VERSION,
+            workspaces: vec![WorkspaceSnapshot {
+                id: Some("workspace".into()),
+                custom_name: None,
+                identity_cwd: cwd.clone(),
+                worktree_space: None,
+                public_pane_numbers: HashMap::new(),
+                next_public_pane_number: 0,
+                public_tab_numbers: Vec::new(),
+                next_public_tab_number: 0,
+                tabs: vec![TabSnapshot {
+                    custom_name: None,
+                    layout: LayoutSnapshot::Pane(0),
+                    panes: HashMap::from([(
+                        0,
+                        super::super::snapshot::PaneSnapshot {
+                            cwd,
+                            label: None,
+                            agent_name: Some("worker".into()),
+                            managed_agent_kind: Some("claude".into()),
+                            agent_session: Some(super::super::snapshot::PaneAgentSessionSnapshot {
+                                source: "herdr:claude".into(),
+                                agent: "claude".into(),
+                                kind: crate::agent_resume::AgentSessionRefKind::Id,
+                                value: "claude-session".into(),
+                            }),
+                            launch_argv: None,
+                            agent_resume_args: resume_args.clone(),
+                        },
+                    )]),
+                    zoomed: false,
+                    focused: Some(0),
+                    root_pane: Some(0),
+                }],
+                active_tab: 0,
+            }],
+            active: Some(0),
+            selected: 0,
+            sidebar_width: None,
+            sidebar_section_split: None,
+            collapsed_space_keys: Default::default(),
+        };
+        let (events, _event_rx) = mpsc::channel(4);
+
+        let (_workspaces, terminals, _runtimes) = restore(
+            &snapshot,
+            None,
+            24,
+            80,
+            0,
+            test_restore_shell(),
+            crate::config::ShellModeConfig::NonLogin,
+            true,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        );
+
+        let terminal = terminals.values().next().expect("terminal state");
+        let plan = terminal
+            .pending_agent_resume_plan
+            .as_ref()
+            .expect("claude session should get a pending resume plan");
+        assert_eq!(
+            plan.argv,
+            vec![
+                "claude",
+                "--resume",
+                "claude-session",
+                "--dangerously-skip-permissions",
+                "--settings",
+                "exec-settings.json"
+            ]
+        );
+        assert_eq!(terminal.agent_resume_args, resume_args);
+        assert_eq!(terminal.agent_name.as_deref(), Some("worker"));
+
+        // 재개를 끄면 계획은 없지만 인자는 다음 저장을 위해 남는다.
+        let (_workspaces, terminals, _runtimes) = restore(
+            &snapshot,
+            None,
+            24,
+            80,
+            0,
+            test_restore_shell(),
+            crate::config::ShellModeConfig::NonLogin,
+            false,
+            mpsc::channel(4).0,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        );
+        let terminal = terminals.values().next().expect("terminal state");
+        assert!(terminal.pending_agent_resume_plan.is_none());
+        assert_eq!(terminal.agent_resume_args, resume_args);
     }
 
     #[tokio::test]
@@ -1686,6 +1805,7 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                agent_resume_args: Vec::new(),
             },
         );
         let history = SessionHistorySnapshot {

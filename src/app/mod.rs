@@ -2840,6 +2840,7 @@ mod tests {
                 kind: "pi".into(),
                 pane_id,
                 args: Vec::new(),
+                resume_args: Vec::new(),
                 timeout_ms: Some(1_000),
             }),
         });
@@ -2848,6 +2849,83 @@ mod tests {
         assert_eq!(response["error"]["code"], "agent_pane_unavailable");
         assert_eq!(app.state.workspaces[0].tabs[0].layout.pane_count(), 1);
         assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(root));
+    }
+
+    #[tokio::test]
+    async fn agent_start_stores_resume_args_and_resume_args_set_replaces_them() {
+        let mut app = test_app();
+        let workspace = Workspace::test_new("agent-resume-args");
+        let root = workspace.tabs[0].root_pane;
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        let pane_id = app.pane_info(0, root).unwrap().pane_id;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&root]
+            .attached_terminal_id
+            .clone();
+        let (runtime, _receiver) =
+            crate::terminal::TerminalRuntime::test_with_channel_capacity(80, 24, 8);
+        app.terminal_runtimes.insert(terminal_id.clone(), runtime);
+
+        let started = app.handle_api_request(crate::api::schema::Request {
+            id: "req_agent_start_resume_args".into(),
+            method: crate::api::schema::Method::AgentStart(crate::api::schema::AgentStartParams {
+                name: "worker".into(),
+                kind: "claude".into(),
+                pane_id: pane_id.clone(),
+                args: vec!["--settings".into(), "exec.json".into()],
+                resume_args: vec!["--dangerously-skip-permissions".into()],
+                timeout_ms: Some(4_000),
+            }),
+        });
+        let started: serde_json::Value = serde_json::from_str(&started).unwrap();
+        assert_eq!(started["result"]["type"], "agent_started", "{started}");
+        assert_eq!(
+            started["result"]["agent"]["resume_args"],
+            serde_json::json!(["--dangerously-skip-permissions"])
+        );
+        assert_eq!(
+            app.state.terminals[&terminal_id].agent_resume_args,
+            vec!["--dangerously-skip-permissions".to_string()]
+        );
+
+        let set = |app: &mut App, args: Vec<String>| -> serde_json::Value {
+            let response = app.handle_api_request(crate::api::schema::Request {
+                id: "req_agent_resume_args_set".into(),
+                method: crate::api::schema::Method::AgentResumeArgsSet(
+                    crate::api::schema::AgentResumeArgsSetParams {
+                        target: "worker".into(),
+                        args,
+                    },
+                ),
+            });
+            serde_json::from_str(&response).unwrap()
+        };
+        let replaced = set(&mut app, vec!["--permission-mode".into(), "plan".into()]);
+        assert_eq!(replaced["result"]["type"], "agent_info", "{replaced}");
+        assert_eq!(
+            replaced["result"]["agent"]["resume_args"],
+            serde_json::json!(["--permission-mode", "plan"])
+        );
+        assert_eq!(
+            app.state.terminals[&terminal_id].agent_resume_args,
+            vec!["--permission-mode".to_string(), "plan".to_string()]
+        );
+
+        let rejected = set(&mut app, vec!["bad\u{7}arg".into()]);
+        assert_eq!(rejected["error"]["code"], "invalid_agent_argument");
+        assert_eq!(
+            app.state.terminals[&terminal_id].agent_resume_args,
+            vec!["--permission-mode".to_string(), "plan".to_string()]
+        );
+
+        let cleared = set(&mut app, Vec::new());
+        assert_eq!(cleared["result"]["type"], "agent_info");
+        assert!(cleared["result"]["agent"].get("resume_args").is_none());
+        assert!(app.state.terminals[&terminal_id]
+            .agent_resume_args
+            .is_empty());
     }
 
     #[tokio::test]
@@ -2882,6 +2960,7 @@ mod tests {
                 kind: "codex".into(),
                 pane_id: pane_id.clone(),
                 args: vec!["resume".into(), "codex-session".into()],
+                resume_args: Vec::new(),
                 timeout_ms: Some(4_000),
             }),
         };

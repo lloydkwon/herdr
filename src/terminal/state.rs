@@ -162,6 +162,9 @@ pub struct TerminalState {
     /// fallback 상태를 건드리지 않게 하고 소비된다(훅 권한이 없는 화면 감지 에이전트용).
     handoff_restored_process_agent: Option<Agent>,
     pub pending_agent_resume_plan: Option<crate::agent_resume::AgentResumePlan>,
+    /// 서버가 이 pane 의 에이전트 세션을 스스로 재개(콜드 복원)할 때 재개 명령 뒤에 덧붙이는 인자.
+    /// `agent start --resume-arg` 나 `agent.resume_args.set` 으로 정하며 세션 파일에 저장된다.
+    pub agent_resume_args: Vec<String>,
 }
 
 impl TerminalState {
@@ -199,6 +202,7 @@ impl TerminalState {
             agent_process_acquisition_pending: false,
             handoff_restored_process_agent: None,
             pending_agent_resume_plan: None,
+            agent_resume_args: Vec::new(),
         }
     }
 
@@ -2137,7 +2141,12 @@ impl TerminalState {
         });
     }
 
+    pub fn set_agent_resume_args(&mut self, args: Vec<String>) {
+        self.agent_resume_args = args;
+    }
+
     pub fn clear_agent_name(&mut self) {
+        self.agent_resume_args.clear();
         if self
             .managed_agent_launch_session
             .take()

@@ -2,8 +2,9 @@ use std::time::{Duration, Instant};
 
 use crate::api::schema::{
     AgentPromptParams, AgentPromptWaitOptions, AgentReadParams, AgentRenameParams,
-    AgentSendKeysParams, AgentStartParams, AgentTarget, AgentWaitParams, EmptyParams, ErrorBody,
-    ErrorResponse, Method, PaneProcessInfoParams, PaneTarget, ReadFormat, ReadSource, Request,
+    AgentResumeArgsSetParams, AgentSendKeysParams, AgentStartParams, AgentTarget, AgentWaitParams,
+    EmptyParams, ErrorBody, ErrorResponse, Method, PaneProcessInfoParams, PaneTarget, ReadFormat,
+    ReadSource, Request,
 };
 
 const AGENT_START_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -22,6 +23,7 @@ pub(super) fn run_agent_command(args: &[String]) -> std::io::Result<i32> {
         "send-keys" => agent_send_keys(&args[1..]),
         "prompt" => agent_prompt(&args[1..]),
         "rename" => agent_rename(&args[1..]),
+        "resume-args" => agent_resume_args(&args[1..]),
         "focus" => agent_focus(&args[1..]),
         "wait" => agent_wait(&args[1..]),
         "attach" => agent_attach(&args[1..]),
@@ -288,7 +290,7 @@ fn matched_rule_region_preview<'a>(
 
 fn agent_start(args: &[String]) -> std::io::Result<i32> {
     let Some(name) = args.first() else {
-        eprintln!("usage: herdr agent start <name> --kind KIND --pane ID [--timeout MS] [-- <agent-args...>]");
+        eprintln!("usage: herdr agent start <name> --kind KIND --pane ID [--timeout MS] [--resume-arg ARG]... [-- <agent-args...>]");
         return Ok(2);
     };
     let separator = args
@@ -298,9 +300,18 @@ fn agent_start(args: &[String]) -> std::io::Result<i32> {
     let mut kind = None;
     let mut pane_id = None;
     let mut timeout_ms = None;
+    let mut resume_args = Vec::new();
     let mut index = 1;
     while index < separator {
         match args[index].as_str() {
+            "--resume-arg" => {
+                let Some(value) = args.get(index + 1).filter(|_| index + 1 < separator) else {
+                    eprintln!("missing value for --resume-arg");
+                    return Ok(2);
+                };
+                resume_args.push(value.clone());
+                index += 2;
+            }
             "--kind" => {
                 let Some(value) = args.get(index + 1).filter(|_| index + 1 < separator) else {
                     eprintln!("missing value for --kind");
@@ -376,6 +387,7 @@ fn agent_start(args: &[String]) -> std::io::Result<i32> {
                 kind: kind.clone(),
                 pane_id: pane_id.clone(),
                 args: agent_args.clone(),
+                resume_args: resume_args.clone(),
                 timeout_ms,
             }),
         })?;
@@ -768,6 +780,43 @@ fn agent_rename(args: &[String]) -> std::io::Result<i32> {
     })?)
 }
 
+/// `herdr agent resume-args <target> [-- ARG...]` — 서버가 이 에이전트를 재개할 때 덧붙일 인자를
+/// 통째로 바꾼다. 인자를 주지 않으면(또는 --clear) 지운다.
+fn agent_resume_args(args: &[String]) -> std::io::Result<i32> {
+    let Some(target) = args.first() else {
+        eprintln!("usage: herdr agent resume-args <target> [--clear] [-- <arg...>]");
+        return Ok(2);
+    };
+    let rest = &args[1..];
+    let separator = rest.iter().position(|arg| arg == "--");
+    let options = &rest[..separator.unwrap_or(rest.len())];
+    let mut clear = false;
+    for option in options {
+        match option.as_str() {
+            "--clear" => clear = true,
+            other => {
+                eprintln!("unknown option: {other}");
+                return Ok(2);
+            }
+        }
+    }
+    let resume_args = separator
+        .map(|index| rest[index + 1..].to_vec())
+        .unwrap_or_default();
+    if clear && !resume_args.is_empty() {
+        eprintln!("--clear cannot be combined with arguments");
+        return Ok(2);
+    }
+
+    super::print_response(&super::send_request(&Request {
+        id: "cli:agent:resume-args".into(),
+        method: Method::AgentResumeArgsSet(AgentResumeArgsSetParams {
+            target: target.clone(),
+            args: resume_args,
+        }),
+    })?)
+}
+
 fn agent_prompt(args: &[String]) -> std::io::Result<i32> {
     let Some(target) = args.first() else {
         eprintln!(
@@ -931,11 +980,12 @@ fn print_agent_help() {
     eprintln!("  herdr agent send-keys <target> <key> [key ...]");
     eprintln!("  herdr agent prompt <target> <text> [--wait] [--until STATUS]... [--timeout MS]");
     eprintln!("  herdr agent rename <target> <name>|--clear");
+    eprintln!("  herdr agent resume-args <target> [--clear] [-- <arg...>]");
     eprintln!("  herdr agent focus <target>");
     eprintln!("  herdr agent wait <target> [--until STATUS]... [--timeout MS]");
     eprintln!("  herdr agent attach <target> [--takeover]");
     eprintln!(
-        "  herdr agent start <name> --kind KIND --pane ID [--timeout MS] [-- <agent-args...>]"
+        "  herdr agent start <name> --kind KIND --pane ID [--timeout MS] [--resume-arg ARG]... [-- <agent-args...>]"
     );
     eprintln!("  herdr agent explain <target> [--json|--format text|json] [--verbose]");
     eprintln!(

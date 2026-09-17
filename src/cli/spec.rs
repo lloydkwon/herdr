@@ -375,6 +375,22 @@ fn agent_command() -> Command {
                         .required(true),
                 ),
         )
+        .subcommand(
+            Command::new("resume-args")
+                .about("Replace the arguments appended when the server resumes an agent session")
+                .override_usage("herdr agent resume-args <TARGET> [--clear] [-- [ARG]...]")
+                .arg(required("target", "TARGET"))
+                .arg(flag("clear").help("Remove the stored resume arguments"))
+                .arg(
+                    Arg::new("resume_args")
+                        .value_name("ARG")
+                        .num_args(0..)
+                        .last(true),
+                )
+                .after_help(
+                    "Stored with the session and appended to the native resume command (for example claude --resume <id> <ARG>...) when Herdr restores the pane after a server restart. Without arguments the stored list is cleared.",
+                ),
+        )
         .subcommand(id_command("focus", "target", "Focus an agent"))
         .subcommand(
             Command::new("wait")
@@ -420,6 +436,11 @@ fn agent_command() -> Command {
                 .arg(
                     option("timeout", "MS")
                         .help("Wait for interactive readiness (default: 30000; max: 300000)"),
+                )
+                .arg(
+                    option("resume-arg", "ARG")
+                        .action(ArgAction::Append)
+                        .help("Argument appended when the server resumes this agent session after a restart; repeat for more than one"),
                 )
                 .arg(
                     Arg::new("agent_args")
@@ -1306,6 +1327,17 @@ mod tests {
         assert!(agent_start
             .get_arguments()
             .any(|arg| arg.get_id() == "agent_args"));
+        assert!(has_option(agent_start, "resume-arg"));
+    }
+
+    #[test]
+    fn spec_models_agent_resume_args_target_and_trailing_args() {
+        let cmd = super::command();
+        let resume_args = command_path(&cmd, &["agent", "resume-args"]);
+        assert!(has_option(resume_args, "clear"));
+        assert!(resume_args
+            .get_arguments()
+            .any(|arg| arg.get_id() == "resume_args"));
     }
 
     fn long_help(path: &[&str]) -> String {

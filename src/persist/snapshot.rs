@@ -107,6 +107,9 @@ pub struct PaneSnapshot {
     pub agent_session: Option<PaneAgentSessionSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_argv: Option<Vec<String>>,
+    /// 서버가 에이전트 세션을 재개할 때 재개 명령 뒤에 덧붙일 인자. 비어 있으면 생략.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_resume_args: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -335,6 +338,10 @@ fn capture_tab(
             })
             .unwrap_or_default();
         let launch_argv = terminal.and_then(|terminal| terminal.launch_argv.clone());
+        let agent_resume_args = terminal
+            .filter(|_| agent_name.is_some())
+            .map(|terminal| terminal.agent_resume_args.clone())
+            .unwrap_or_default();
         let agent_session = terminal.and_then(|terminal| {
             if let Some(authority) = terminal.hook_authority.as_ref() {
                 if let Some(session_ref) = authority.session_ref.as_ref() {
@@ -365,6 +372,7 @@ fn capture_tab(
                 managed_agent_kind,
                 agent_session,
                 launch_argv,
+                agent_resume_args,
             },
         );
     }
@@ -631,6 +639,37 @@ mod tests {
     }
 
     #[test]
+    fn pane_snapshot_resume_args_are_omitted_when_empty_and_round_trip_otherwise() {
+        let empty = PaneSnapshot {
+            cwd: PathBuf::from("/tmp/x"),
+            label: None,
+            agent_name: None,
+            managed_agent_kind: None,
+            agent_session: None,
+            launch_argv: None,
+            agent_resume_args: Vec::new(),
+        };
+        let json = serde_json::to_string(&empty).unwrap();
+        assert!(!json.contains("agent_resume_args"), "{json}");
+        let legacy: PaneSnapshot = serde_json::from_str(r#"{"cwd":"/tmp/x"}"#).unwrap();
+        assert!(legacy.agent_resume_args.is_empty());
+
+        let with_args = PaneSnapshot {
+            agent_name: Some("worker".into()),
+            managed_agent_kind: Some("claude".into()),
+            agent_resume_args: vec![
+                "--dangerously-skip-permissions".into(),
+                "--settings".into(),
+                "a b.json".into(),
+            ],
+            ..empty
+        };
+        let json = serde_json::to_string(&with_args).unwrap();
+        let restored: PaneSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.agent_resume_args, with_args.agent_resume_args);
+    }
+
+    #[test]
     fn round_trip_full_workspace_snapshot() {
         let mut panes = HashMap::new();
         panes.insert(
@@ -642,6 +681,7 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                agent_resume_args: Vec::new(),
             },
         );
         panes.insert(
@@ -653,6 +693,7 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                agent_resume_args: Vec::new(),
             },
         );
 
@@ -1206,6 +1247,7 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                agent_resume_args: Vec::new(),
             },
         );
         panes.insert(
@@ -1219,6 +1261,7 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                agent_resume_args: Vec::new(),
             },
         );
 

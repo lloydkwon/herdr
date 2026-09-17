@@ -1348,6 +1348,24 @@
           ],
           "type": "object"
         },
+        "AgentResumeArgsSetParams": {
+          "properties": {
+            "args": {
+              "description": "Replaces the stored resume arguments. Empty clears them.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "target": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "target"
+          ],
+          "type": "object"
+        },
         "AgentSendKeysParams": {
           "properties": {
             "keys": {
@@ -1382,6 +1400,13 @@
             },
             "pane_id": {
               "type": "string"
+            },
+            "resume_args": {
+              "description": "Extra arguments appended to the native resume command when the server restores this\nagent session after a restart. Stored with the session; empty means none.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
             },
             "timeout_ms": {
               "description": "Startup timeout in milliseconds. Values must be greater than 3000 and at most 300000.",
@@ -5424,6 +5449,22 @@
         {
           "properties": {
             "method": {
+              "const": "agent.resume_args.set",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentResumeArgsSetParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "agent.view.set",
               "type": "string"
             },
@@ -6712,6 +6753,13 @@
             },
             "pane_id": {
               "type": "string"
+            },
+            "resume_args": {
+              "description": "Extra arguments the server appends when it natively resumes this agent session.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
             },
             "revision": {
               "format": "uint64",
