@@ -41,6 +41,9 @@ const GIT_REPO_DISCOVERY_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60
 const AUTO_UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const PENDING_AGENT_RESUME_THEME_WAIT: Duration = Duration::from_millis(750);
 const SESSION_SAVE_DEBOUNCE: Duration = Duration::from_secs(5);
+/// 디바운스가 계속 밀려도 이 시간 안에는 반드시 저장한다. pane 라벨을 몇 초마다 바꾸는 외부 감시자가
+/// 있으면 5초 디바운스가 영원히 리셋돼 session.json 이 갱신되지 않던 문제의 상한.
+const SESSION_SAVE_MAX_DELAY: Duration = Duration::from_secs(30);
 
 use ratatui::layout::Rect;
 use tokio::sync::{mpsc, Notify};
@@ -137,6 +140,8 @@ pub struct App {
     pub(crate) agent_metadata_deadline: Option<Instant>,
     pub(crate) pending_agent_resume_deadline: Option<Instant>,
     pub(crate) session_save_deadline: Option<Instant>,
+    /// 지금 대기 중인 저장이 처음 요청된 시각. 저장이 시작되면 비운다.
+    pub(crate) session_save_requested_at: Option<Instant>,
     pub(crate) session_save_thread: Option<std::thread::JoinHandle<()>>,
     pane_exit_checkpoint_pending: bool,
     pub(crate) detached_process_children: Vec<std::process::Child>,
@@ -598,6 +603,7 @@ impl App {
             agent_metadata_deadline: None,
             pending_agent_resume_deadline: None,
             session_save_deadline: None,
+            session_save_requested_at: None,
             session_save_thread: None,
             pane_exit_checkpoint_pending: false,
             detached_process_children: Vec::new(),
@@ -3115,6 +3121,42 @@ mod tests {
 
         assert!(!app.state.session_dirty);
         assert!(app.session_save_deadline.is_some());
+    }
+
+    #[test]
+    fn repeated_session_save_requests_do_not_defer_past_max_delay() {
+        let mut app = test_app();
+        app.policy.persist_session = true;
+        let start = Instant::now();
+
+        app.schedule_session_save_at(start);
+        assert_eq!(
+            app.session_save_deadline,
+            Some(start + super::SESSION_SAVE_DEBOUNCE)
+        );
+
+        // 디바운스보다 짧은 간격으로 계속 요청해도 마감은 첫 요청 + 상한을 넘지 않는다.
+        let mut now = start;
+        for _ in 0..20 {
+            now += Duration::from_secs(3);
+            app.schedule_session_save_at(now);
+            let deadline = app.session_save_deadline.unwrap();
+            assert!(deadline <= start + super::SESSION_SAVE_MAX_DELAY);
+            assert!(deadline <= now + super::SESSION_SAVE_DEBOUNCE);
+        }
+        assert_eq!(
+            app.session_save_deadline,
+            Some(start + super::SESSION_SAVE_MAX_DELAY)
+        );
+
+        // 저장이 시작되면 다음 요청은 새 창을 연다.
+        app.session_save_requested_at = None;
+        let later = start + Duration::from_secs(120);
+        app.schedule_session_save_at(later);
+        assert_eq!(
+            app.session_save_deadline,
+            Some(later + super::SESSION_SAVE_DEBOUNCE)
+        );
     }
 
     #[test]

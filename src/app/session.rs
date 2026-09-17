@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use super::{App, SESSION_SAVE_DEBOUNCE};
+use super::{App, SESSION_SAVE_DEBOUNCE, SESSION_SAVE_MAX_DELAY};
 
 enum SessionSaveJob {
     Clear,
@@ -12,9 +12,16 @@ enum SessionSaveJob {
 
 impl App {
     pub(super) fn schedule_session_save(&mut self) {
+        self.schedule_session_save_at(Instant::now());
+    }
+
+    /// 디바운스(마지막 요청 + 5초)로 저장을 미루되, 첫 요청 + 상한을 넘기지는 않는다.
+    pub(crate) fn schedule_session_save_at(&mut self, now: Instant) {
         if self.policy.persist_session {
             self.pane_exit_checkpoint_pending = false;
-            self.session_save_deadline = Some(Instant::now() + SESSION_SAVE_DEBOUNCE);
+            let first_requested = *self.session_save_requested_at.get_or_insert(now);
+            self.session_save_deadline =
+                Some((now + SESSION_SAVE_DEBOUNCE).min(first_requested + SESSION_SAVE_MAX_DELAY));
         }
     }
 
@@ -70,6 +77,7 @@ impl App {
         let job = self.capture_session_save_job();
         self.pane_exit_checkpoint_pending = false;
         self.session_save_deadline = None;
+        self.session_save_requested_at = None;
         match std::thread::Builder::new()
             .name("herdr-session-save".into())
             .spawn(move || run_session_save_job(job))
@@ -95,6 +103,7 @@ impl App {
         run_session_save_job(self.capture_session_save_job());
         self.pane_exit_checkpoint_pending = false;
         self.session_save_deadline = None;
+        self.session_save_requested_at = None;
     }
 
     pub(crate) fn checkpoint_session_before_pane_exit(&mut self) {
@@ -111,7 +120,9 @@ impl App {
     pub(crate) fn finish_checkpointed_pane_exit(&mut self) {
         if self.pane_exit_checkpoint_pending {
             self.state.session_dirty = false;
-            self.session_save_deadline = Some(Instant::now() + SESSION_SAVE_DEBOUNCE);
+            let now = Instant::now();
+            self.session_save_requested_at.get_or_insert(now);
+            self.session_save_deadline = Some(now + SESSION_SAVE_DEBOUNCE);
         }
     }
 
